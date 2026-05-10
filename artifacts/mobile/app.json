@@ -14,10 +14,19 @@
       "backgroundColor": "#080810"
     },
     "ios": {
-      "supportsTablet": false
+      "supportsTablet": false,
+      "bundleIdentifier": "com.Aura.mobile",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
-      "backgroundColor": "#080810"
+      "backgroundColor": "#080810",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ],
+      "package": "com.Aura.mobile"
     },
     "web": {
       "favicon": "./assets/images/icon.png"
@@ -36,6 +45,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "b8c28733-e497-49d0-bf34-7b49721283fe"
+      }
+    },
+    "owner": "durkioo"
   }
 }
