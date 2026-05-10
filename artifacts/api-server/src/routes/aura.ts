@@ -402,4 +402,44 @@ router.get("/artist", async (req: Request, res: Response) => {
   }
 });
 
+// ── Popular artists list ────────────────────────────────────────────────────
+
+const POPULAR_ARTISTS = [
+  { id: 'taylor-swift',      name: 'Taylor Swift',      genre: 'Pop' },
+  { id: 'drake',             name: 'Drake',             genre: 'Hip-Hop' },
+  { id: 'the-weeknd',        name: 'The Weeknd',        genre: 'R&B' },
+  { id: 'bad-bunny',         name: 'Bad Bunny',         genre: 'Latin' },
+  { id: 'billie-eilish',     name: 'Billie Eilish',     genre: 'Alt-Pop' },
+  { id: 'kendrick-lamar',    name: 'Kendrick Lamar',    genre: 'Hip-Hop' },
+  { id: 'dua-lipa',          name: 'Dua Lipa',          genre: 'Pop' },
+  { id: 'post-malone',       name: 'Post Malone',       genre: 'Hip-Hop' },
+  { id: 'ariana-grande',     name: 'Ariana Grande',     genre: 'Pop' },
+  { id: 'ed-sheeran',        name: 'Ed Sheeran',        genre: 'Pop' },
+  { id: 'sza',               name: 'SZA',               genre: 'R&B' },
+  { id: 'travis-scott',      name: 'Travis Scott',      genre: 'Hip-Hop' },
+  { id: 'olivia-rodrigo',    name: 'Olivia Rodrigo',    genre: 'Pop-Rock' },
+  { id: 'sabrina-carpenter', name: 'Sabrina Carpenter', genre: 'Pop' },
+  { id: 'tyler-creator',     name: 'Tyler, the Creator',genre: 'Hip-Hop' },
+  { id: 'beyonce',           name: 'Beyoncé',            genre: 'R&B/Pop' },
+  { id: 'coldplay',          name: 'Coldplay',           genre: 'Alternative' },
+  { id: 'imagine-dragons',   name: 'Imagine Dragons',   genre: 'Alternative' },
+  { id: 'frank-ocean',       name: 'Frank Ocean',       genre: 'R&B' },
+  { id: 'harry-styles',      name: 'Harry Styles',      genre: 'Pop' },
+  { id: 'j-cole',            name: 'J. Cole',           genre: 'Hip-Hop' },
+  { id: 'adele',             name: 'Adele',             genre: 'Soul' },
+  { id: 'doja-cat',          name: 'Doja Cat',          genre: 'Pop/Hip-Hop' },
+  { id: 'sade',              name: 'Sade',              genre: 'Soul/Jazz' },
+  { id: 'burna-boy',         name: 'Burna Boy',         genre: 'Afrobeats' },
+  { id: 'wizkid',            name: 'Wizkid',            genre: 'Afrobeats' },
+  { id: 'rihanna',           name: 'Rihanna',           genre: 'R&B/Pop' },
+  { id: 'juice-wrld',        name: 'Juice WRLD',        genre: 'Emo-Rap' },
+  { id: 'arctic-monkeys',    name: 'Arctic Monkeys',    genre: 'Indie Rock' },
+  { id: 'mac-miller',        name: 'Mac Miller',        genre: 'Hip-Hop' },
+];
+
+// GET /artists/popular
+router.get("/artists/popular", (_req: Request, res: Response) => {
+  res.json(POPULAR_ARTISTS);
+});
+
 export default router;

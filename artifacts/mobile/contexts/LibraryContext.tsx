@@ -17,10 +17,12 @@ interface LibraryContextType {
   history: HistoryEntry[];
   stats: Stats;
   likedIds: Set<string>;
+  favoriteArtists: Set<string>;
   addTrack: (track: Track) => void;
   removeTrack: (id: string) => void;
   updateTrack: (id: string, updates: Partial<Track>) => void;
   toggleLike: (trackId: string, title: string, artist: string, thumbnail: string, duration?: number) => void;
+  toggleFavoriteArtist: (artistName: string) => void;
   addToHistory: (entry: Omit<HistoryEntry, 'id'>) => void;
   createPlaylist: (name: string) => void;
   deletePlaylist: (id: string) => void;
@@ -37,6 +39,7 @@ const KEYS = {
   HISTORY: '@aura:history',
   LIKED: '@aura:liked',
   STATS: '@aura:stats',
+  FAVORITE_ARTISTS: '@aura:favorite_artists',
 };
 
 const DEFAULT_STATS: Stats = {
@@ -53,22 +56,25 @@ export function LibraryProvider({ children }: { children: React.ReactNode }) {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [likedIds, setLikedIds] = useState<Set<string>>(new Set());
   const [stats, setStats] = useState<Stats>(DEFAULT_STATS);
+  const [favoriteArtists, setFavoriteArtists] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     (async () => {
       try {
-        const [t, p, h, l, s] = await Promise.all([
+        const [t, p, h, l, s, fa] = await Promise.all([
           AsyncStorage.getItem(KEYS.TRACKS),
           AsyncStorage.getItem(KEYS.PLAYLISTS),
           AsyncStorage.getItem(KEYS.HISTORY),
           AsyncStorage.getItem(KEYS.LIKED),
           AsyncStorage.getItem(KEYS.STATS),
+          AsyncStorage.getItem(KEYS.FAVORITE_ARTISTS),
         ]);
         if (t) setTracks(JSON.parse(t));
         if (p) setPlaylists(JSON.parse(p));
         if (h) setHistory(JSON.parse(h));
         if (l) setLikedIds(new Set(JSON.parse(l)));
         if (s) setStats(JSON.parse(s));
+        if (fa) setFavoriteArtists(new Set(JSON.parse(fa)));
       } catch {}
     })();
   }, []);
@@ -124,6 +130,15 @@ export function LibraryProvider({ children }: { children: React.ReactNode }) {
       const updated = [...prev, newTrack];
       persist(KEYS.TRACKS, updated);
       return updated;
+    });
+  }, []);
+
+  const toggleFavoriteArtist = useCallback((artistName: string) => {
+    setFavoriteArtists(prev => {
+      const next = new Set(prev);
+      if (next.has(artistName)) { next.delete(artistName); } else { next.add(artistName); }
+      persist(KEYS.FAVORITE_ARTISTS, [...next]);
+      return next;
     });
   }, []);
 
@@ -213,9 +228,10 @@ export function LibraryProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <LibraryContext.Provider value={{
-      tracks, playlists, history, stats, likedIds,
-      addTrack, removeTrack, updateTrack, toggleLike, addToHistory,
-      createPlaylist, deletePlaylist, addToPlaylist, removeFromPlaylist, incrementPlayCount,
+      tracks, playlists, history, stats, likedIds, favoriteArtists,
+      addTrack, removeTrack, updateTrack, toggleLike, toggleFavoriteArtist,
+      addToHistory, createPlaylist, deletePlaylist, addToPlaylist,
+      removeFromPlaylist, incrementPlayCount,
     }}>
       {children}
     </LibraryContext.Provider>

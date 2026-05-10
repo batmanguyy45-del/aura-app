@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useRef, useCallback, useEffect } from 'react';
 import { Audio } from 'expo-av';
+import { Platform } from 'react-native';
 import type { Track, SearchResult, EQSettings } from '@/constants/types';
 import { getStreamUrl, getApiBase } from '@/constants/api';
 
@@ -17,7 +18,7 @@ export interface PlayerContextType {
   isLoading: boolean;
   eqSettings: EQSettings;
   autoQueueActive: boolean;
-  play: (track: QueueTrack, newQueue?: QueueTrack[]) => Promise<void>;
+  play: (track: QueueTrack, newQueue?: QueueTrack[], artistSeed?: string) => Promise<void>;
   pause: () => Promise<void>;
   resume: () => Promise<void>;
   seek: (positionSeconds: number) => Promise<void>;
@@ -57,7 +58,6 @@ const DEFAULT_EQ: EQSettings = {
   balance: 0,
 };
 
-// Diverse radio-seed queries rotated to keep the queue fresh
 const RADIO_SEEDS = [
   'top hits 2026',
   'chill vibes mix',
@@ -77,6 +77,40 @@ function pickSeed(exclude: string[]): string {
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
+// ── Media Session helpers ────────────────────────────────────────────────────
+
+function isMediaSessionAvailable(): boolean {
+  return Platform.OS === 'web' &&
+    typeof window !== 'undefined' &&
+    'mediaSession' in navigator;
+}
+
+function updateMediaSessionMetadata(track: QueueTrack) {
+  if (!isMediaSessionAvailable()) return;
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: track.title,
+      artist: track.artist,
+      album: 'AURA',
+      artwork: track.thumbnail
+        ? [
+            { src: track.thumbnail, sizes: '512x512', type: 'image/jpeg' },
+            { src: track.thumbnail, sizes: '256x256', type: 'image/jpeg' },
+          ]
+        : [],
+    });
+  } catch {}
+}
+
+function setMediaSessionState(playing: boolean) {
+  if (!isMediaSessionAvailable()) return;
+  try {
+    navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+  } catch {}
+}
+
+// ── Context ──────────────────────────────────────────────────────────────────
+
 const PlayerContext = createContext<PlayerContextType | null>(null);
 
 export function PlayerProvider({ children }: { children: React.ReactNode }) {
@@ -94,6 +128,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   const soundRef = useRef<Audio.Sound | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const loadGenRef = useRef(0);          // ← double-play guard
   const queueRef = useRef(queue);
   const queueIndexRef = useRef(queueIndex);
   const repeatModeRef = useRef(repeatMode);
@@ -105,6 +140,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   queueIndexRef.current = queueIndex;
   repeatModeRef.current = repeatMode;
 
+  // ── Audio mode ──────────────────────────────────────────────────────────
   useEffect(() => {
     Audio.setAudioModeAsync({
       staysActiveInBackground: true,
@@ -116,6 +152,40 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  // ── Media Session action handlers (registered once) ─────────────────────
+  const pauseRef = useRef<() => Promise<void>>();
+  const resumeRef = useRef<() => Promise<void>>();
+  const nextRef = useRef<() => Promise<void>>();
+  const prevRef = useRef<() => Promise<void>>();
+
+  useEffect(() => {
+    if (!isMediaSessionAvailable()) return;
+    try {
+      navigator.mediaSession.setActionHandler('play', () => resumeRef.current?.());
+      navigator.mediaSession.setActionHandler('pause', () => pauseRef.current?.());
+      navigator.mediaSession.setActionHandler('nexttrack', () => nextRef.current?.());
+      navigator.mediaSession.setActionHandler('previoustrack', () => prevRef.current?.());
+      navigator.mediaSession.setActionHandler('stop', () => pauseRef.current?.());
+    } catch {}
+    return () => {
+      if (!isMediaSessionAvailable()) return;
+      try {
+        (['play', 'pause', 'nexttrack', 'previoustrack', 'stop'] as MediaSessionAction[])
+          .forEach(a => { try { navigator.mediaSession.setActionHandler(a, null); } catch {} });
+      } catch {}
+    };
+  }, []);
+
+  // ── Sync MediaSession metadata & playback state ─────────────────────────
+  useEffect(() => {
+    if (currentTrack) updateMediaSessionMetadata(currentTrack);
+  }, [currentTrack]);
+
+  useEffect(() => {
+    setMediaSessionState(isPlaying);
+  }, [isPlaying]);
+
+  // ── Helpers ─────────────────────────────────────────────────────────────
   const clearInterval_ = () => {
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
@@ -123,7 +193,6 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // Fetch diverse tracks and append to queue — never repeat IDs already seen
   const fetchMoreTracks = useCallback(async (seedQuery?: string) => {
     if (isFetchingMoreRef.current) return;
     isFetchingMoreRef.current = true;
@@ -141,13 +210,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
       const fresh = data.filter(t => !seenIdsRef.current.has(t.id));
       fresh.forEach(t => seenIdsRef.current.add(t.id));
-
       if (fresh.length > 0) {
         setAutoQueueActive(true);
         setQueue(prev => [...prev, ...fresh]);
       }
     } catch {
-      // silently ignore
     } finally {
       isFetchingMoreRef.current = false;
     }
@@ -162,13 +229,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       await soundRef.current?.replayAsync().catch(() => {});
       return;
     }
-
     const nextIdx = idx + 1;
-
-    // Auto-top-up: if we're 4 tracks from the end, fetch more
-    if (nextIdx >= q.length - 4) {
-      fetchMoreTracks();
-    }
+    if (nextIdx >= q.length - 4) fetchMoreTracks();
 
     if (nextIdx < q.length) {
       setQueueIndex(nextIdx);
@@ -178,33 +240,50 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       await loadAndPlayTrack(q[0]);
     } else {
       setIsPlaying(false);
+      setMediaSessionState(false);
     }
   }, [fetchMoreTracks]);
 
+  // ── Core load — generation-guarded to prevent double playback ───────────
   const loadAndPlayTrack = async (track: QueueTrack) => {
+    const gen = ++loadGenRef.current;   // bump generation
+
     setIsLoading(true);
     clearInterval_();
 
+    // Unload previous sound first
+    const prevSound = soundRef.current;
+    soundRef.current = null;
+    if (prevSound) {
+      await prevSound.unloadAsync().catch(() => {});
+    }
+
+    // If another load was kicked off while we were unloading, bail
+    if (gen !== loadGenRef.current) return;
+
+    setCurrentTrack(track);
+    setPosition(0);
+    setDuration(0);
+    setIsPlaying(false);
+    updateMediaSessionMetadata(track);
+
     try {
-      if (soundRef.current) {
-        await soundRef.current.unloadAsync().catch(() => {});
-        soundRef.current = null;
-      }
-
-      setCurrentTrack(track);
-      setPosition(0);
-      setDuration(0);
-      setIsPlaying(false);
-
       const streamUrl = getStreamUrl(track.id);
       const { sound } = await Audio.Sound.createAsync(
         { uri: streamUrl },
         { shouldPlay: true, rate: eqSettings.tempo, volume: 1.0 }
       );
 
+      // Stale check again after the async create
+      if (gen !== loadGenRef.current) {
+        sound.unloadAsync().catch(() => {});
+        return;
+      }
+
       soundRef.current = sound;
       setIsPlaying(true);
       setIsLoading(false);
+      setMediaSessionState(true);
 
       intervalRef.current = setInterval(async () => {
         if (!soundRef.current) return;
@@ -221,21 +300,22 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         } catch {}
       }, 500);
     } catch {
-      setIsLoading(false);
+      if (gen === loadGenRef.current) {
+        setIsLoading(false);
+      }
     }
   };
 
-  const play = useCallback(async (track: QueueTrack, newQueue?: QueueTrack[]) => {
-    // Build initial queue: source list (deduped by id)
+  // ── Public API ───────────────────────────────────────────────────────────
+  const play = useCallback(async (
+    track: QueueTrack,
+    newQueue?: QueueTrack[],
+    artistSeed?: string,
+  ) => {
     const seen = new Set<string>();
     const baseQueue: QueueTrack[] = [];
-    const source = newQueue ?? [track];
-    for (const t of source) {
-      if (!seen.has(t.id)) {
-        seen.add(t.id);
-        baseQueue.push(t);
-        seenIdsRef.current.add(t.id);
-      }
+    for (const t of (newQueue ?? [track])) {
+      if (!seen.has(t.id)) { seen.add(t.id); baseQueue.push(t); seenIdsRef.current.add(t.id); }
     }
 
     const idx = Math.max(0, baseQueue.findIndex(t => t.id === track.id));
@@ -243,30 +323,32 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     setQueueIndex(idx);
     setAutoQueueActive(false);
     usedSeedsRef.current = [];
+
     await loadAndPlayTrack(track);
 
-    // Background: enrich queue with related + diverse tracks
-    // Use artist name from track as first related seed
-    const artistSeed = track.artist
-      ? `${track.artist} music similar songs`
-      : pickSeed([]);
-
-    fetchMoreTracks(artistSeed);
+    // Background enrich: use explicit artist seed, track artist, or random radio seed
+    const seed = artistSeed ??
+      (track.artist ? `${track.artist} music similar songs` : pickSeed([]));
+    fetchMoreTracks(seed);
   }, [fetchMoreTracks]);
 
   const pause = useCallback(async () => {
     if (soundRef.current) {
       await soundRef.current.pauseAsync().catch(() => {});
       setIsPlaying(false);
+      setMediaSessionState(false);
     }
   }, []);
+  pauseRef.current = pause;
 
   const resume = useCallback(async () => {
     if (soundRef.current) {
       await soundRef.current.playAsync().catch(() => {});
       setIsPlaying(true);
+      setMediaSessionState(true);
     }
   }, []);
+  resumeRef.current = resume;
 
   const seek = useCallback(async (positionSeconds: number) => {
     if (soundRef.current) {
@@ -279,10 +361,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     const q = queueRef.current;
     const idx = queueIndexRef.current;
     const nextIdx = idx + 1;
-
-    // Top-up if running low
     if (nextIdx >= q.length - 4) fetchMoreTracks();
-
     if (nextIdx < q.length) {
       setQueueIndex(nextIdx);
       await loadAndPlayTrack(q[nextIdx]);
@@ -291,12 +370,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       await loadAndPlayTrack(q[0]);
     }
   }, [fetchMoreTracks]);
+  nextRef.current = next;
 
   const prev = useCallback(async () => {
-    if (position > 3) {
-      await seek(0);
-      return;
-    }
+    if (position > 3) { await seek(0); return; }
     const q = queueRef.current;
     const idx = queueIndexRef.current;
     const prevIdx = idx - 1;
@@ -305,8 +382,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       await loadAndPlayTrack(q[prevIdx]);
     }
   }, [position, seek]);
+  prevRef.current = prev;
 
-  const toggleShuffle = useCallback(() => setShuffle(prev => !prev), []);
+  const toggleShuffle = useCallback(() => setShuffle(p => !p), []);
 
   const toggleRepeat = useCallback(() => {
     setRepeatMode(prev => {
@@ -317,9 +395,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const addToQueue = useCallback((track: QueueTrack) => {
-    if (!seenIdsRef.current.has(track.id)) {
-      seenIdsRef.current.add(track.id);
-    }
+    seenIdsRef.current.add(track.id);
     setQueue(prev => [...prev, track]);
   }, []);
 
@@ -328,10 +404,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const clearQueue = useCallback(() => {
-    setQueue([]);
-    setQueueIndex(-1);
-    seenIdsRef.current.clear();
-    usedSeedsRef.current = [];
+    setQueue([]); setQueueIndex(-1);
+    seenIdsRef.current.clear(); usedSeedsRef.current = [];
     setAutoQueueActive(false);
   }, []);
 
