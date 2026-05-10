@@ -172,14 +172,28 @@ router.get("/stream/:videoId", async (req: Request, res: Response) => {
   }
 });
 
-// GET /related/:videoId  — search based on track info
+// Diverse genre seeds so related always mixes things up
+const GENRE_SEEDS = [
+  "indie pop hits",
+  "r&b soul vibes",
+  "electronic chill",
+  "hip hop bangers",
+  "acoustic singer songwriter",
+  "alternative rock anthems",
+  "latin pop hits",
+  "k-pop viral",
+  "jazz lofi beats",
+  "dance pop 2026",
+];
+
+// GET /related/:videoId  — diverse radio-style suggestions
 router.get("/related/:videoId", async (req: Request, res: Response) => {
   const { videoId } = req.params;
   const key = `related:${videoId}`;
   const cached = getCache<unknown[]>(key);
   if (cached) return void res.json(cached);
   try {
-    // Get video title to find related
+    // Get track info for context
     const infoOut = await ytdlpRun([
       "--dump-json",
       "--no-playlist",
@@ -188,18 +202,46 @@ router.get("/related/:videoId", async (req: Request, res: Response) => {
     ], 20_000);
     const info = JSON.parse(infoOut.trim().split("\n")[0]) as Record<string, unknown>;
     const artist = String(info.uploader ?? info.channel ?? "");
-    const searchTerm = artist || "music";
 
-    const out = await ytdlpRun([
-      `ytsearch15:${searchTerm} music`,
-      "--dump-json",
-      "--flat-playlist",
-      "--no-playlist",
-      "--no-warnings",
-    ], 30_000);
-    const tracks = parseFlatLines(out);
-    setCache(key, tracks, 10 * 60 * 1000);
-    res.json(tracks);
+    // Pick two diverse genre seeds (rotated by videoId hash so it's deterministic but varied)
+    const hash = videoId.split("").reduce((a, c) => a + c.charCodeAt(0), 0);
+    const seed1 = GENRE_SEEDS[hash % GENRE_SEEDS.length];
+    const seed2 = GENRE_SEEDS[(hash + 3) % GENRE_SEEDS.length];
+
+    // Run two searches in parallel: artist-adjacent + genre-diverse
+    const [artistOut, genreOut] = await Promise.all([
+      ytdlpRun([
+        `ytsearch8:${artist || "popular music"} similar artists`,
+        "--dump-json", "--flat-playlist", "--no-playlist", "--no-warnings",
+      ], 25_000),
+      ytdlpRun([
+        `ytsearch10:${seed1} ${seed2}`,
+        "--dump-json", "--flat-playlist", "--no-playlist", "--no-warnings",
+      ], 25_000),
+    ]);
+
+    const artistTracks = parseFlatLines(artistOut);
+    const genreTracks = parseFlatLines(genreOut);
+
+    // Interleave: 1 artist-adjacent, 2 genre-diverse, etc. — prevents clumping
+    const combined: typeof artistTracks = [];
+    const seen = new Set<string>();
+    seen.add(videoId); // never return the source track
+
+    let ai = 0, gi = 0;
+    while (combined.length < 20 && (ai < artistTracks.length || gi < genreTracks.length)) {
+      if (ai < artistTracks.length) {
+        const t = artistTracks[ai++];
+        if (t && !seen.has(t.id as string)) { seen.add(t.id as string); combined.push(t); }
+      }
+      for (let k = 0; k < 2 && gi < genreTracks.length; k++) {
+        const t = genreTracks[gi++];
+        if (t && !seen.has(t.id as string)) { seen.add(t.id as string); combined.push(t); }
+      }
+    }
+
+    setCache(key, combined, 10 * 60 * 1000);
+    res.json(combined);
   } catch (err) {
     req.log.error({ err }, "related error");
     res.status(500).json({ error: "Failed to fetch related" });

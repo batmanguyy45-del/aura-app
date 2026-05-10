@@ -1,19 +1,20 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   View, Text, Image, TouchableOpacity, StyleSheet,
-  Dimensions, Platform, PanResponder, ScrollView, Modal, FlatList,
+  Dimensions, Platform, PanResponder, ScrollView,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
-  useSharedValue, useAnimatedStyle, withRepeat, withTiming,
-  withSequence, Easing,
+  useSharedValue, useAnimatedStyle, withRepeat,
+  withSequence, withTiming, Easing,
 } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
 import { usePlayer } from '@/contexts/PlayerContext';
 import { useSkin } from '@/contexts/SkinContext';
 import { useLibrary } from '@/contexts/LibraryContext';
+import { WaveformVisualizer } from '@/components/WaveformVisualizer';
 import { getApiBase } from '@/constants/api';
 
 const { width: W, height: H } = Dimensions.get('window');
@@ -32,7 +33,7 @@ export default function PlayerScreen() {
   const { skin } = useSkin();
   const {
     currentTrack, isPlaying, position, duration,
-    queue, queueIndex, shuffle, repeatMode, eqSettings, isLoading,
+    queue, queueIndex, shuffle, repeatMode, eqSettings, isLoading, autoQueueActive,
     pause, resume, seek, next, prev, toggleShuffle, toggleRepeat,
     addToQueue, removeFromQueue, updateEQ,
   } = usePlayer();
@@ -45,21 +46,26 @@ export default function PlayerScreen() {
   const progress = duration > 0 ? Math.min(position / duration, 1) : 0;
   const isLiked = currentTrack ? likedIds.has(currentTrack.id) : false;
 
+  // Album art float animation
   const floatAnim = useSharedValue(0);
   const artStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: floatAnim.value }],
   }));
 
   useEffect(() => {
-    floatAnim.value = withRepeat(
-      withSequence(
-        withTiming(-6, { duration: 1500, easing: Easing.inOut(Easing.ease) }),
-        withTiming(0, { duration: 1500, easing: Easing.inOut(Easing.ease) })
-      ),
-      -1,
-      true
-    );
-  }, []);
+    if (isPlaying) {
+      floatAnim.value = withRepeat(
+        withSequence(
+          withTiming(-7, { duration: 1600, easing: Easing.inOut(Easing.ease) }),
+          withTiming(0, { duration: 1600, easing: Easing.inOut(Easing.ease) })
+        ),
+        -1,
+        true
+      );
+    } else {
+      floatAnim.value = withTiming(0, { duration: 400 });
+    }
+  }, [isPlaying]);
 
   const fetchLyrics = async () => {
     if (!currentTrack) return;
@@ -101,9 +107,9 @@ export default function PlayerScreen() {
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top + 8;
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom + 8;
-
   const artSize = W * 0.68;
 
+  // Empty state
   if (!currentTrack) {
     return (
       <LinearGradient
@@ -121,6 +127,8 @@ export default function PlayerScreen() {
     );
   }
 
+  const upcomingTracks = queue.slice(queueIndex + 1, queueIndex + 21);
+
   return (
     <View style={[styles.screen, { backgroundColor: skin.backgroundColor }]}>
       <LinearGradient
@@ -131,9 +139,10 @@ export default function PlayerScreen() {
       />
 
       <ScrollView
-        contentContainerStyle={[styles.content, { paddingTop: topPad, paddingBottom: botPad }]}
+        contentContainerStyle={[styles.content, { paddingTop: topPad, paddingBottom: botPad + 60 }]}
         showsVerticalScrollIndicator={false}
       >
+        {/* Album art */}
         <View style={styles.artWrap}>
           <Animated.View style={artStyle}>
             {currentTrack.thumbnail ? (
@@ -144,25 +153,43 @@ export default function PlayerScreen() {
                   {
                     width: artSize,
                     height: artSize,
-                    borderRadius: skin.albumArtShape === 'circle' ? artSize / 2 : skin.albumArtShape === 'square' ? 8 : 24,
+                    borderRadius:
+                      skin.albumArtShape === 'circle' ? artSize / 2 :
+                      skin.albumArtShape === 'square' ? 8 : 24,
                     shadowColor: skin.accentPrimary,
                     shadowOffset: { width: 0, height: 12 },
-                    shadowOpacity: skin.albumArtGlow ? 0.6 : 0.2,
-                    shadowRadius: 24,
+                    shadowOpacity: skin.albumArtGlow ? 0.65 : 0.2,
+                    shadowRadius: 28,
                   },
                 ]}
                 resizeMode="cover"
               />
             ) : (
-              <View style={[styles.artPlaceholder, { width: artSize, height: artSize, borderRadius: 24, backgroundColor: colors.muted }]}>
+              <View style={[styles.artPlaceholder, {
+                width: artSize, height: artSize, borderRadius: 24,
+                backgroundColor: colors.muted,
+              }]}>
                 <Ionicons name="musical-notes" size={80} color={skin.accentPrimary} />
               </View>
             )}
           </Animated.View>
         </View>
 
+        {/* Waveform visualizer */}
+        <View style={styles.waveformRow}>
+          <WaveformVisualizer
+            isPlaying={isPlaying}
+            color={skin.accentPrimary}
+            height={32}
+          />
+        </View>
+
+        {/* Track info */}
         <View style={styles.trackInfo}>
-          <Text style={[styles.trackTitle, { color: skin.textColor, fontSize: 22 * skin.fontSizeScale }]} numberOfLines={2}>
+          <Text
+            style={[styles.trackTitle, { color: skin.textColor, fontSize: 22 * skin.fontSizeScale }]}
+            numberOfLines={2}
+          >
             {currentTrack.title}
           </Text>
           <Text style={[styles.trackArtist, { color: skin.textColor + 'AA' }]} numberOfLines={1}>
@@ -170,6 +197,7 @@ export default function PlayerScreen() {
           </Text>
         </View>
 
+        {/* Progress scrubber */}
         <View style={styles.scrubberArea} {...panResponder.panHandlers}>
           <View style={[styles.scrubberTrack, { backgroundColor: colors.border }]}>
             <LinearGradient
@@ -180,7 +208,7 @@ export default function PlayerScreen() {
             />
             <View style={[
               styles.scrubberThumb,
-              { left: `${progress * 100}%`, backgroundColor: skin.progressEnd }
+              { left: `${progress * 100}%`, backgroundColor: skin.progressEnd },
             ]} />
           </View>
           <View style={styles.timeRow}>
@@ -189,9 +217,10 @@ export default function PlayerScreen() {
           </View>
         </View>
 
+        {/* Secondary controls: shuffle, like, download, bookmark, repeat */}
         <View style={styles.secondaryControls}>
           <TouchableOpacity onPress={toggleShuffle} style={styles.iconBtn} hitSlop={8}>
-            <Ionicons name="shuffle" size={22} color={shuffle ? skin.accentPrimary : skin.textColor + '66'} />
+            <Ionicons name="shuffle" size={22} color={shuffle ? skin.accentPrimary : skin.textColor + '55'} />
           </TouchableOpacity>
           <TouchableOpacity
             onPress={() => {
@@ -202,23 +231,28 @@ export default function PlayerScreen() {
             style={styles.iconBtn}
             hitSlop={8}
           >
-            <Ionicons name={isLiked ? 'heart' : 'heart-outline'} size={24} color={isLiked ? skin.accentSecondary : skin.textColor + '66'} />
+            <Ionicons
+              name={isLiked ? 'heart' : 'heart-outline'}
+              size={24}
+              color={isLiked ? skin.accentSecondary : skin.textColor + '55'}
+            />
           </TouchableOpacity>
           <TouchableOpacity style={styles.iconBtn} hitSlop={8}>
-            <Ionicons name="download-outline" size={22} color={skin.textColor + '66'} />
+            <Ionicons name="download-outline" size={22} color={skin.textColor + '55'} />
           </TouchableOpacity>
           <TouchableOpacity style={styles.iconBtn} hitSlop={8}>
-            <Ionicons name="bookmark-outline" size={22} color={skin.textColor + '66'} />
+            <Ionicons name="share-outline" size={22} color={skin.textColor + '55'} />
           </TouchableOpacity>
           <TouchableOpacity onPress={toggleRepeat} style={styles.iconBtn} hitSlop={8}>
             <Ionicons
               name={repeatMode === 'one' ? 'repeat-sharp' : 'repeat'}
               size={22}
-              color={repeatMode !== 'off' ? skin.accentPrimary : skin.textColor + '66'}
+              color={repeatMode !== 'off' ? skin.accentPrimary : skin.textColor + '55'}
             />
           </TouchableOpacity>
         </View>
 
+        {/* Primary playback controls */}
         <View style={styles.primaryControls}>
           <TouchableOpacity onPress={prev} style={styles.controlBtn} hitSlop={12}>
             <Ionicons name="play-skip-back" size={34} color={skin.textColor} />
@@ -231,7 +265,12 @@ export default function PlayerScreen() {
             {isLoading ? (
               <Ionicons name="ellipsis-horizontal" size={32} color="#fff" />
             ) : (
-              <Ionicons name={isPlaying ? 'pause' : 'play'} size={34} color="#fff" style={{ marginLeft: isPlaying ? 0 : 3 }} />
+              <Ionicons
+                name={isPlaying ? 'pause' : 'play'}
+                size={34}
+                color="#fff"
+                style={{ marginLeft: isPlaying ? 0 : 3 }}
+              />
             )}
           </TouchableOpacity>
           <TouchableOpacity onPress={next} style={styles.controlBtn} hitSlop={12}>
@@ -239,22 +278,34 @@ export default function PlayerScreen() {
           </TouchableOpacity>
         </View>
 
+        {/* Panel toggles */}
         <View style={styles.panelButtons}>
-          {([['lyrics', 'text-outline'], ['eq', 'options-outline'], ['queue', 'list-outline']] as const).map(([p, icon]) => (
+          {([
+            ['lyrics', 'text-outline', 'Lyrics'],
+            ['eq', 'options-outline', 'EQ'],
+            ['queue', 'list-outline', `Queue ${queue.length > 0 ? `(${queue.length - queueIndex - 1})` : ''}`],
+          ] as const).map(([p, icon, label]) => (
             <TouchableOpacity
               key={p}
               onPress={() => togglePanel(p)}
               style={[
                 styles.panelBtn,
-                { backgroundColor: panel === p ? skin.accentPrimary + '33' : 'transparent', borderColor: panel === p ? skin.accentPrimary : skin.textColor + '22' }
+                {
+                  backgroundColor: panel === p ? skin.accentPrimary + '33' : 'transparent',
+                  borderColor: panel === p ? skin.accentPrimary : skin.textColor + '22',
+                },
               ]}
               hitSlop={6}
             >
-              <Ionicons name={icon as any} size={20} color={panel === p ? skin.accentPrimary : skin.textColor + '77'} />
+              <Ionicons name={icon as any} size={16} color={panel === p ? skin.accentPrimary : skin.textColor + '77'} />
+              <Text style={[styles.panelBtnLabel, { color: panel === p ? skin.accentPrimary : skin.textColor + '66' }]}>
+                {label}
+              </Text>
             </TouchableOpacity>
           ))}
         </View>
 
+        {/* Lyrics panel */}
         {panel === 'lyrics' && (
           <View style={[styles.panel, { backgroundColor: colors.card + 'EE', borderColor: colors.border }]}>
             <Text style={[styles.panelTitle, { color: colors.foreground }]}>Lyrics</Text>
@@ -266,37 +317,69 @@ export default function PlayerScreen() {
           </View>
         )}
 
+        {/* EQ panel */}
         {panel === 'eq' && (
           <EQPanel eqSettings={eqSettings} updateEQ={updateEQ} skin={skin} colors={colors} />
         )}
 
+        {/* Queue panel */}
         {panel === 'queue' && (
           <View style={[styles.panel, { backgroundColor: colors.card + 'EE', borderColor: colors.border }]}>
-            <Text style={[styles.panelTitle, { color: colors.foreground }]}>Queue ({queue.length})</Text>
-            {queue.map((t, i) => (
-              <TouchableOpacity
-                key={t.id + i}
-                style={[styles.queueItem, i === queueIndex && { backgroundColor: skin.accentPrimary + '22' }]}
-              >
-                <Text style={[styles.queueNum, { color: i === queueIndex ? skin.accentPrimary : colors.mutedForeground }]}>{i + 1}</Text>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.queueTitle, { color: colors.foreground }]} numberOfLines={1}>{t.title}</Text>
-                  <Text style={[styles.queueArtist, { color: colors.mutedForeground }]} numberOfLines={1}>{t.artist}</Text>
+            <View style={styles.queueHeader}>
+              <Text style={[styles.panelTitle, { color: colors.foreground }]}>
+                Up Next
+              </Text>
+              {autoQueueActive && (
+                <View style={[styles.autoBadge, { backgroundColor: skin.accentPrimary + '33', borderColor: skin.accentPrimary + '66' }]}>
+                  <Ionicons name="radio-outline" size={11} color={skin.accentPrimary} />
+                  <Text style={[styles.autoBadgeText, { color: skin.accentPrimary }]}>Radio</Text>
                 </View>
-                <TouchableOpacity onPress={() => removeFromQueue(i)} hitSlop={8}>
-                  <Ionicons name="close" size={18} color={colors.mutedForeground} />
-                </TouchableOpacity>
-              </TouchableOpacity>
-            ))}
-            {queue.length === 0 && (
-              <Text style={[styles.lyricsText, { color: colors.mutedForeground }]}>Queue is empty</Text>
+              )}
+            </View>
+
+            {/* Now playing */}
+            {currentTrack && (
+              <View style={[styles.queueItem, styles.nowPlayingItem, { backgroundColor: skin.accentPrimary + '18', borderColor: skin.accentPrimary + '44' }]}>
+                <WaveformVisualizer isPlaying={isPlaying} color={skin.accentPrimary} height={18} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.queueTitle, { color: skin.accentPrimary }]} numberOfLines={1}>{currentTrack.title}</Text>
+                  <Text style={[styles.queueArtist, { color: colors.mutedForeground }]} numberOfLines={1}>{currentTrack.artist}</Text>
+                </View>
+              </View>
             )}
+
+            {upcomingTracks.length === 0 && (
+              <Text style={[styles.lyricsText, { color: colors.mutedForeground }]}>
+                Fetching suggestions…
+              </Text>
+            )}
+
+            {upcomingTracks.map((t, i) => {
+              const globalIdx = queueIndex + 1 + i;
+              return (
+                <View
+                  key={t.id + globalIdx}
+                  style={styles.queueItem}
+                >
+                  <Text style={[styles.queueNum, { color: colors.mutedForeground }]}>{i + 1}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.queueTitle, { color: colors.foreground }]} numberOfLines={1}>{t.title}</Text>
+                    <Text style={[styles.queueArtist, { color: colors.mutedForeground }]} numberOfLines={1}>{t.artist}</Text>
+                  </View>
+                  <TouchableOpacity onPress={() => removeFromQueue(globalIdx)} hitSlop={8}>
+                    <Ionicons name="close" size={16} color={colors.mutedForeground} />
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
           </View>
         )}
       </ScrollView>
     </View>
   );
 }
+
+// ── EQ Panel ──────────────────────────────────────────────────────────────────
 
 function EQPanel({ eqSettings, updateEQ, skin, colors }: {
   eqSettings: ReturnType<typeof usePlayer>['eqSettings'];
@@ -307,7 +390,7 @@ function EQPanel({ eqSettings, updateEQ, skin, colors }: {
   const EQ_MAX = 12;
   return (
     <View style={[styles.panel, { backgroundColor: colors.card + 'EE', borderColor: colors.border }]}>
-      <Text style={[styles.panelTitle, { color: colors.foreground }]}>EQ</Text>
+      <Text style={[styles.panelTitle, { color: colors.foreground }]}>Equalizer</Text>
       <View style={styles.eqRow}>
         {eqSettings.bands.map((band, i) => (
           <View key={band.frequency} style={styles.eqBand}>
@@ -323,7 +406,7 @@ function EQPanel({ eqSettings, updateEQ, skin, colors }: {
                 }}
                 style={styles.eqArrow}
               >
-                <Ionicons name="chevron-up" size={14} color={colors.mutedForeground} />
+                <Ionicons name="chevron-up" size={12} color={colors.mutedForeground} />
               </TouchableOpacity>
               <View style={[styles.eqFill, {
                 height: `${((band.gain + EQ_MAX) / (EQ_MAX * 2)) * 100}%`,
@@ -337,7 +420,7 @@ function EQPanel({ eqSettings, updateEQ, skin, colors }: {
                 }}
                 style={styles.eqArrow}
               >
-                <Ionicons name="chevron-down" size={14} color={colors.mutedForeground} />
+                <Ionicons name="chevron-down" size={12} color={colors.mutedForeground} />
               </TouchableOpacity>
             </View>
             <Text style={[styles.eqFreq, { color: colors.mutedForeground }]}>
@@ -347,19 +430,24 @@ function EQPanel({ eqSettings, updateEQ, skin, colors }: {
         ))}
       </View>
       <View style={styles.eqToggles}>
-        {[
+        {([
           { label: 'Bass Boost', key: 'bassBoost' as const },
           { label: 'Treble Boost', key: 'trebleBoost' as const },
-        ].map(({ label, key }) => (
+        ]).map(({ label, key }) => (
           <TouchableOpacity
             key={key}
             onPress={() => updateEQ({ [key]: !eqSettings[key] })}
             style={[
               styles.eqToggle,
-              { backgroundColor: eqSettings[key] ? skin.accentPrimary : colors.muted, borderColor: eqSettings[key] ? skin.accentPrimary : colors.border },
+              {
+                backgroundColor: eqSettings[key] ? skin.accentPrimary : colors.muted,
+                borderColor: eqSettings[key] ? skin.accentPrimary : colors.border,
+              },
             ]}
           >
-            <Text style={[styles.eqToggleText, { color: eqSettings[key] ? '#fff' : colors.mutedForeground }]}>{label}</Text>
+            <Text style={[styles.eqToggleText, { color: eqSettings[key] ? '#fff' : colors.mutedForeground }]}>
+              {label}
+            </Text>
           </TouchableOpacity>
         ))}
       </View>
@@ -367,23 +455,28 @@ function EQPanel({ eqSettings, updateEQ, skin, colors }: {
   );
 }
 
+// ── Styles ─────────────────────────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
   screen: { flex: 1 },
   content: {
     paddingHorizontal: 24,
     alignItems: 'center',
-    gap: 24,
+    gap: 20,
   },
   artWrap: {
     alignItems: 'center',
-    paddingTop: 16,
+    paddingTop: 12,
   },
-  art: {
-    elevation: 20,
-  },
+  art: { elevation: 20 },
   artPlaceholder: {
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  waveformRow: {
+    width: '100%',
+    alignItems: 'center',
+    paddingHorizontal: 16,
   },
   trackInfo: {
     alignItems: 'center',
@@ -429,9 +522,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
-  timeText: {
-    fontSize: 12,
-  },
+  timeText: { fontSize: 12 },
   secondaryControls: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -465,7 +556,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.5,
+    shadowOpacity: 0.55,
     shadowRadius: 16,
     elevation: 12,
   },
@@ -473,15 +564,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 12,
+    gap: 10,
   },
   panelBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    borderWidth: 1,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    gap: 5,
+  },
+  panelBtnLabel: {
+    fontSize: 12,
+    fontWeight: '600',
   },
   panel: {
     width: '100%',
@@ -491,40 +587,64 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   panelTitle: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '700',
   },
   lyricsText: {
     fontSize: 15,
     lineHeight: 24,
   },
+  queueHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  autoBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  autoBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  nowPlayingItem: {
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    gap: 10,
+  },
   queueItem: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 8,
-    paddingHorizontal: 8,
+    paddingHorizontal: 4,
     borderRadius: 8,
     gap: 10,
   },
   queueNum: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
-    width: 20,
+    width: 18,
     textAlign: 'center',
   },
   queueTitle: {
     fontSize: 13,
     fontWeight: '600',
   },
-  queueArtist: {
-    fontSize: 11,
-  },
+  queueArtist: { fontSize: 11 },
   eqRow: {
     flexDirection: 'row',
     alignItems: 'flex-end',
     justifyContent: 'space-around',
     height: 130,
-    gap: 4,
+    gap: 2,
   },
   eqBand: {
     flex: 1,
@@ -532,12 +652,10 @@ const styles = StyleSheet.create({
     height: '100%',
     gap: 4,
   },
-  eqGain: {
-    fontSize: 9,
-  },
+  eqGain: { fontSize: 8 },
   eqTrack: {
     flex: 1,
-    width: 20,
+    width: 18,
     borderRadius: 4,
     overflow: 'hidden',
     alignItems: 'center',
@@ -549,12 +667,8 @@ const styles = StyleSheet.create({
     right: 0,
     borderRadius: 4,
   },
-  eqArrow: {
-    zIndex: 1,
-  },
-  eqFreq: {
-    fontSize: 8,
-  },
+  eqArrow: { zIndex: 1 },
+  eqFreq: { fontSize: 8 },
   eqToggles: {
     flexDirection: 'row',
     gap: 10,
@@ -565,10 +679,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
   },
-  eqToggleText: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
+  eqToggleText: { fontSize: 12, fontWeight: '600' },
   empty: {
     flex: 1,
     alignItems: 'center',

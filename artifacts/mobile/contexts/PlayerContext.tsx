@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useRef, useCallback, useEffect } from 'react';
 import { Audio } from 'expo-av';
 import type { Track, SearchResult, EQSettings } from '@/constants/types';
-import { getStreamUrl } from '@/constants/api';
+import { getStreamUrl, getApiBase } from '@/constants/api';
 
 export type QueueTrack = Track | SearchResult;
 
@@ -16,6 +16,7 @@ export interface PlayerContextType {
   repeatMode: 'off' | 'all' | 'one';
   isLoading: boolean;
   eqSettings: EQSettings;
+  autoQueueActive: boolean;
   play: (track: QueueTrack, newQueue?: QueueTrack[]) => Promise<void>;
   pause: () => Promise<void>;
   resume: () => Promise<void>;
@@ -56,6 +57,26 @@ const DEFAULT_EQ: EQSettings = {
   balance: 0,
 };
 
+// Diverse radio-seed queries rotated to keep the queue fresh
+const RADIO_SEEDS = [
+  'top hits 2026',
+  'chill vibes mix',
+  'popular songs right now',
+  'indie music 2026',
+  'best pop songs 2026',
+  'viral music hits',
+  'alternative hits',
+  'r&b soul mix',
+  'electronic dance music',
+  'acoustic covers popular',
+];
+
+function pickSeed(exclude: string[]): string {
+  const available = RADIO_SEEDS.filter(s => !exclude.includes(s));
+  const pool = available.length > 0 ? available : RADIO_SEEDS;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
 const PlayerContext = createContext<PlayerContextType | null>(null);
 
 export function PlayerProvider({ children }: { children: React.ReactNode }) {
@@ -69,12 +90,16 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [repeatMode, setRepeatMode] = useState<'off' | 'all' | 'one'>('off');
   const [isLoading, setIsLoading] = useState(false);
   const [eqSettings, setEQSettings] = useState<EQSettings>(DEFAULT_EQ);
+  const [autoQueueActive, setAutoQueueActive] = useState(false);
 
   const soundRef = useRef<Audio.Sound | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const queueRef = useRef(queue);
   const queueIndexRef = useRef(queueIndex);
   const repeatModeRef = useRef(repeatMode);
+  const usedSeedsRef = useRef<string[]>([]);
+  const isFetchingMoreRef = useRef(false);
+  const seenIdsRef = useRef<Set<string>>(new Set());
 
   queueRef.current = queue;
   queueIndexRef.current = queueIndex;
@@ -98,6 +123,36 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  // Fetch diverse tracks and append to queue — never repeat IDs already seen
+  const fetchMoreTracks = useCallback(async (seedQuery?: string) => {
+    if (isFetchingMoreRef.current) return;
+    isFetchingMoreRef.current = true;
+    try {
+      const seed = seedQuery ?? pickSeed(usedSeedsRef.current);
+      usedSeedsRef.current.push(seed);
+      if (usedSeedsRef.current.length > 8) usedSeedsRef.current.shift();
+
+      const resp = await fetch(
+        `${getApiBase()}/search?q=${encodeURIComponent(seed)}&filter=music`
+      );
+      if (!resp.ok) return;
+      const data = (await resp.json()) as QueueTrack[];
+      if (!Array.isArray(data)) return;
+
+      const fresh = data.filter(t => !seenIdsRef.current.has(t.id));
+      fresh.forEach(t => seenIdsRef.current.add(t.id));
+
+      if (fresh.length > 0) {
+        setAutoQueueActive(true);
+        setQueue(prev => [...prev, ...fresh]);
+      }
+    } catch {
+      // silently ignore
+    } finally {
+      isFetchingMoreRef.current = false;
+    }
+  }, []);
+
   const handleTrackEnd = useCallback(async () => {
     const mode = repeatModeRef.current;
     const q = queueRef.current;
@@ -107,7 +162,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       await soundRef.current?.replayAsync().catch(() => {});
       return;
     }
+
     const nextIdx = idx + 1;
+
+    // Auto-top-up: if we're 4 tracks from the end, fetch more
+    if (nextIdx >= q.length - 4) {
+      fetchMoreTracks();
+    }
+
     if (nextIdx < q.length) {
       setQueueIndex(nextIdx);
       await loadAndPlayTrack(q[nextIdx]);
@@ -117,7 +179,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     } else {
       setIsPlaying(false);
     }
-  }, []);
+  }, [fetchMoreTracks]);
 
   const loadAndPlayTrack = async (track: QueueTrack) => {
     setIsLoading(true);
@@ -164,12 +226,33 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   };
 
   const play = useCallback(async (track: QueueTrack, newQueue?: QueueTrack[]) => {
-    const q = newQueue ?? [track];
-    const idx = Math.max(0, q.findIndex(t => t.id === track.id));
-    setQueue(q);
+    // Build initial queue: source list (deduped by id)
+    const seen = new Set<string>();
+    const baseQueue: QueueTrack[] = [];
+    const source = newQueue ?? [track];
+    for (const t of source) {
+      if (!seen.has(t.id)) {
+        seen.add(t.id);
+        baseQueue.push(t);
+        seenIdsRef.current.add(t.id);
+      }
+    }
+
+    const idx = Math.max(0, baseQueue.findIndex(t => t.id === track.id));
+    setQueue(baseQueue);
     setQueueIndex(idx);
+    setAutoQueueActive(false);
+    usedSeedsRef.current = [];
     await loadAndPlayTrack(track);
-  }, []);
+
+    // Background: enrich queue with related + diverse tracks
+    // Use artist name from track as first related seed
+    const artistSeed = track.artist
+      ? `${track.artist} music similar songs`
+      : pickSeed([]);
+
+    fetchMoreTracks(artistSeed);
+  }, [fetchMoreTracks]);
 
   const pause = useCallback(async () => {
     if (soundRef.current) {
@@ -196,6 +279,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     const q = queueRef.current;
     const idx = queueIndexRef.current;
     const nextIdx = idx + 1;
+
+    // Top-up if running low
+    if (nextIdx >= q.length - 4) fetchMoreTracks();
+
     if (nextIdx < q.length) {
       setQueueIndex(nextIdx);
       await loadAndPlayTrack(q[nextIdx]);
@@ -203,7 +290,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       setQueueIndex(0);
       await loadAndPlayTrack(q[0]);
     }
-  }, []);
+  }, [fetchMoreTracks]);
 
   const prev = useCallback(async () => {
     if (position > 3) {
@@ -230,6 +317,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const addToQueue = useCallback((track: QueueTrack) => {
+    if (!seenIdsRef.current.has(track.id)) {
+      seenIdsRef.current.add(track.id);
+    }
     setQueue(prev => [...prev, track]);
   }, []);
 
@@ -240,6 +330,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const clearQueue = useCallback(() => {
     setQueue([]);
     setQueueIndex(-1);
+    seenIdsRef.current.clear();
+    usedSeedsRef.current = [];
+    setAutoQueueActive(false);
   }, []);
 
   const reorderQueue = useCallback((from: number, to: number) => {
@@ -261,7 +354,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   return (
     <PlayerContext.Provider value={{
       currentTrack, isPlaying, position, duration, queue, queueIndex,
-      shuffle, repeatMode, isLoading, eqSettings,
+      shuffle, repeatMode, isLoading, eqSettings, autoQueueActive,
       play, pause, resume, seek, next, prev,
       toggleShuffle, toggleRepeat, addToQueue, removeFromQueue,
       clearQueue, reorderQueue, updateEQ,
