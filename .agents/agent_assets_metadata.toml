@@ -1,0 +1,8 @@
+uploads = []
+outputs = []
+
+[[generated]]
+id = "__jT5Xp35r98NXwOGysRj"
+uri = "file://artifacts/mobile/assets/images/icon.png"
+type = "image"
+title = "aura-app-icon"

@@ -1,0 +1,328 @@
+AURA — God-Tier Complete Build Specification
+Concept
+AURA is a private, ad-free, zero-account music and video streaming, downloading, and management PWA for mobile. It combines the audio engine depth of Poweramp, the discovery intelligence of Spotify, the universal downloading power of Snaptube, and a Winamp-level skin editor — all running from a single Replit server with all user data stored locally on the phone. No subscriptions. No tracking. No cloud. No ads. Ever.
+
+Tech Stack
+Backend: Node.js + Express on Replit
+Install dependencies: yt-dlp (pip), ffmpeg (apt), express, express-rate-limit, node-fetch, cors
+Frontend: Vanilla JS PWA — no framework. Runs in any mobile browser, installs to home screen via manifest.
+Streaming & Search: Piped API — https://pipedapi.kavin.rocks (fallback: https://piped-api.privacy.com.de). Zero API key. Zero quota.
+Universal Downloader: yt-dlp — supports 1000+ sites including YouTube, Instagram, TikTok, Twitter/X, Facebook, SoundCloud, Vimeo, Reddit, Twitch, Dailymotion, Pinterest, Rumble, and more.
+Local Storage: IndexedDB for all media blobs, playlists, history, skins, EQ presets, settings.
+Audio Engine: Web Audio API — AnalyserNode (visualizer), BiquadFilterNodes (EQ), GainNode (volume/preamp), StereoPannerNode (balance).
+Lyrics: lyrics.ovh (free, no key)
+Lock Screen + Headphones: Media Session API
+Offline: Service Worker with full app shell caching + background sync
+Notifications: Web Notifications API — download completion alerts
+Voice Search: Web Speech API — SpeechRecognition
+
+Backend Routes — Complete
+GET  /api/trending
+     → fetch Piped trending, return array: { id, title, artist, duration, thumbnail }
+
+GET  /api/search?q=&filter=
+     → Piped search, filter: music | video | all
+     → return: { id, title, artist/uploader, duration, thumbnail, views }
+
+GET  /api/stream/:videoId
+     → resolve Piped audio stream URL for videoId
+     → proxy audio bytes to client with correct Content-Type
+     → supports range requests for seeking
+
+GET  /api/related/:videoId
+     → Piped related tracks for videoId
+
+GET  /api/lyrics?title=&artist=
+     → fetch lyrics.ovh, return plain text
+
+GET  /api/info?url=
+     → spawn: yt-dlp --dump-json --no-playlist <url>
+     → return: { title, uploader, duration, thumbnail, formats[], site_name, subtitles[] }
+     → used to preview any pasted URL before downloading
+
+POST /api/download
+     body: { url, format, quality, subtitles }
+     format options: mp3 | mp4 | m4a | webm | best
+     quality options: audio-only | 144p | 360p | 480p | 720p | 1080p | 1440p | 2160p | best
+     → spawn yt-dlp with --format, --merge-output-format, ffmpeg post-processing
+     → if subtitles: add --write-subs --sub-format srt
+     → stream output to client via res.pipe() with Content-Disposition: attachment header
+     → safety flags: --no-playlist --max-filesize 800m
+
+GET  /api/stream-video?url=
+     → proxy yt-dlp video stream without saving to disk
+     → supports range requests for video scrubbing
+     → used for streaming without downloading
+
+GET  /api/suggest?q=
+     → fetch Piped search suggestions (autocomplete)
+
+GET  /api/artist?id=
+     → Piped channel info: name, avatar, subscriber count, top tracks, bio
+Rate limiter: express-rate-limit — 60 requests/min per IP.
+All routes wrap in try/catch, return { error } JSON on failure.
+yt-dlp auto-updates on server start: yt-dlp -U
+
+IndexedDB Schema — Complete
+tracks
+{ id (yt videoId or hash), title, artist, album, genre, year, duration, thumbnail (base64), audioBlob (Uint8Array), sourceUrl, sourceType, format, bitrate, sampleRate, downloadedAt, playCount, lastPlayed, liked, tags[], replayGain }
+videos
+{ id, title, uploader, duration, thumbnail (base64), videoBlob (Uint8Array), sourceUrl, sourceType, resolution, format, downloadedAt, hasSubtitles, subtitleBlob }
+playlists
+{ id, name, createdAt, updatedAt, coverArt (base64 collage), trackIds[], description, isCollaborative, isPrivate }
+smartPlaylists
+{ id, name, rules: [{ field, operator, value }], sortBy, limit, autoUpdate }
+Rules example: [{ field: 'genre', operator: 'equals', value: 'Hip-Hop' }, { field: 'playCount', operator: 'greaterThan', value: 5 }]
+history
+{ id, trackId, playedAt, completionPercent, sessionId }
+queue
+{ tracks[], currentIndex, shuffleOrder[], repeatMode, savedAt }
+skins
+{ id, name, createdAt, isActive, config (full skin JSON) }
+eqPresets
+{ id, name, bands: [{ frequency, gain, type }][], preampGain, bassBoost, stereoExpansion, reverb, balance }
+bookmarks
+{ id, trackId, timestamp, label }
+abLoops
+{ id, trackId, pointA, pointB, label }
+settings
+key-value store — crossfadeSeconds, gapless, replayGain, defaultDownloadQuality, defaultDownloadFormat, defaultSortBy, sleepTimerMinutes, pitch, tempo, monoMix, balance, preampGain, voiceSearchEnabled, privateSession, scrobblingEnabled, autoQueue, wifiOnlyDownload }
+recyclebin
+{ id, originalTrackData, deletedAt }
+Auto-purge after 30 days.
+stats
+{ totalListeningMinutes, topTracks[], topArtists[], topGenres[], dailyActivity{}, longestStreak, firstPlayDate }
+Updated incrementally on each play.
+
+Frontend Screens
+Navigation
+Bottom tab bar — 5 tabs: Home · Search · Now Playing · Library · Skin Editor
+Mini player sits permanently above the tab bar whenever a track is active. Shows: thumbnail, title (scrolling marquee if long), artist, play/pause, skip next, progress line. Tapping opens full Now Playing. Swipe up on mini player opens Now Playing. Swipe left/right on mini player skips tracks.
+
+SPLASH SCREEN
+Pure black #080810. Word AURA in Syne font, wide letter-spacing, centered vertically and horizontally. Below: a softly breathing purple orb (CSS keyframe animation — scale 1.0 → 1.08 → 1.0, opacity 0.6 → 1.0 → 0.6, 2.4s loop). No logo image — pure CSS. Fades out after 1.8s on first load only.
+
+HOME TAB
+Header: "AURA" wordmark left. Right: clock-based greeting ("Good morning / afternoon / evening, [no name — just the greeting]"). Below header: one-line "What are you feeling?" mood chips — horizontal scroll row of pill buttons: Chill · Hype · Focus · Sad · Workout · Sleep · Party. Tapping a chip runs a Piped search for that mood keyword and populates the feed.
+Feed sections (each is a labeled horizontal scroll row of cards):
+— Trending Now — Piped trending. Card: thumbnail, title, artist, duration badge.
+— Recently Played — Last 20 from IndexedDB history, newest first.
+— You Might Like — Related to last played track via /api/related.
+— Discover Weekly — Locally generated every Monday. Algorithm: take the top 10 most-played artists from stats, run Piped search for each, collect related tracks, deduplicate, shuffle, return 30 tracks not in tracks store (i.e. not yet downloaded/heard).
+— Daily Mix — 6 auto-mixes generated from IndexedDB tracks grouped by dominant genre in play history. Each mix shows a genre name and cover collage.
+— Fresh Downloads — Last 10 downloaded tracks, ordered by downloadedAt.
+Tapping any card streams instantly and pushes to Now Playing.
+
+SEARCH TAB
+Search bar pinned at top — full width, large. Microphone icon inside right edge triggers Web Speech API voice search. As user types: debounced 400ms, calls /api/suggest for autocomplete dropdown (max 6 suggestions).
+Filter chips below bar: All · Music · Videos · Artists
+Auto-switch between two modes:
+Mode 1 — Keyword search: Results list. Each row: thumbnail, title, artist, duration, view count. Action buttons: ▶ Stream · ⬇ Download · + Add to Queue. Artists show a follow button (saves to followed list in settings).
+Mode 2 — Universal URL paste: Detects any pasted URL. Calls /api/info. Shows preview card:
+— Site logo icon + site name (YouTube / Instagram / TikTok / Twitter / SoundCloud / Facebook / Vimeo / Reddit / Twitch / Dailymotion / Pinterest / etc — detect from extractor field in yt-dlp JSON)
+— Thumbnail
+— Title, uploader, duration
+— Format selector: Audio only (MP3) · Audio only (M4A) · Video 360p · Video 480p · Video 720p · Video 1080p · Video 4K (show only formats actually available per yt-dlp formats array)
+— Subtitle toggle (if subtitles available: show languages list, user picks one or none)
+— [Download] button — shows real-time progress bar during download, then Web Notification on complete
+Batch download mode: Long-press any result to enter multi-select mode. Select multiple tracks/URLs. "Download All Selected" button appears. Queues all downloads sequentially in background.
+Recycle Bin — accessible from search header menu — shows deleted tracks with "Restore" and "Permanently Delete" per item. Auto-purges items older than 30 days.
+
+NOW PLAYING SCREEN
+Background — Aurora Engine:
+Hidden <canvas> samples 8×8 pixel grid from album art. K-means clustering (k=3) extracts 3 dominant hex colors. Main canvas fills full screen — renders 3 large radial gradient blobs in those colors, moving very slowly via requestAnimationFrame (each blob has its own sine-wave XY trajectory). Blob colors crossfade over 1.2s when song changes. Aurora intensity scales ±5% on detected beats (analyser peak threshold).
+Album art: Large square centered. Corner radius from active skin. If albumArtRotation skin setting is true: rotates continuously while playing, pauses when paused (CSS animation-play-state). Glow: box-shadow in dominant aurora color. Floating: translateY ±6px, 3s ease loop.
+Track info: Title in display font (from skin). Artist name below, muted. Both truncate. Long-press title to see full title. Below artist: source site badge (e.g. "YouTube" / "SoundCloud") — small pill with site color.
+Progress scrubber: Full-width. Draggable. Gradient fill from aurora color 1 → 2. Current time left, total right. Tapping anywhere on bar seeks. Above the scrubber: A-B loop markers (set with long-press). When A-B loop is active: the segment between A and B is highlighted and loops continuously.
+Controls:
+Row 1 (secondary): 🔀 Shuffle · ❤ Like · ⬇ Download this track · 🔖 Bookmark timestamp · 🔁 Loop (tap cycles: Off → Loop All → Loop One)
+Row 2 (primary): ⏮ Prev · ▶/⏸ Play/Pause (large, 64px) · ⏭ Next
+Below controls: volume slider with pre-amp gain.
+Slide-up panels — triggered by icons in a row below controls:
+Lyrics panel (📝): Slides up 50% of screen. Lyrics from /api/lyrics. Lines scroll estimated sync (character-count timing). Current line: full brightness, slightly larger. Others: muted 40%. If no lyrics found: "No lyrics found — tap to search manually" (opens search input).
+EQ & Audio panel (🎛): Full slide-up sheet.
+— Pre-amp gain slider (-12db to +12db)
+— 10-band graphic EQ with sliders: 32Hz, 64Hz, 125Hz, 250Hz, 500Hz, 1kHz, 2kHz, 4kHz, 8kHz, 16kHz
+— Parametric mode toggle: each band becomes a node with frequency, gain, and Q (bandwidth) controls
+— Bass Boost toggle (+6db at 60Hz and 100Hz)
+— Treble Boost toggle (+4db at 8kHz and 12kHz)
+— Stereo Expansion slider (StereoPannerNode + phase offset: 0 = normal, 100 = wide, negative = mono)
+— Mono Mix toggle
+— Balance slider (left/right pan)
+— Reverb toggle + room size slider (ConvolverNode with generated impulse response)
+— Pitch shift slider (-6 to +6 semitones, implemented via playbackRate + pitch compensation)
+— Tempo slider (0.5x to 2.0x — changes speed without pitch change)
+— Per-output presets toggle: separate EQ configs for Speakers / Headphones / Bluetooth (detected via AudioContext.sinkId or user manual selection)
+— Named preset save/load. Built-in presets: Flat, Bass Boost, Vocal Boost, Electronic, Acoustic, Hip-Hop, Classical, Lo-Fi, Rock
+Queue panel (☰): Full-height slide-up.
+— Current queue as draggable list (drag to reorder)
+— "Add to queue" search bar
+— Clear queue button
+— Save queue as playlist button
+— After last queued track: autoplay suggestions from Piped related (if autoQueue setting is on)
+— Smart Shuffle toggle: instead of pure random, weights tracks by play count and last played date (recently unplayed tracks appear more)
+Sleep Timer panel (😴): Simple — choose 15 / 30 / 45 / 60 / 90 minutes or "end of track". Countdown shows in mini player. On trigger: 20-second fade out, then pause. Cancel anytime.
+Track Info panel (ℹ): Shows full ID3 tag data — title, artist, album, genre, year, format, bitrate, sample rate, file size, source URL, ReplayGain value. Edit button opens tag editor: user can modify title, artist, album, genre, year, and set custom cover art from camera roll. Changes written back to IndexedDB record.
+Crossfade & Gapless: Last N seconds of a track (N = crossfadeSeconds from settings, 0–12s) fade out while next track fades in at the same time — implemented via two overlapping AudioBufferSourceNodes or two <audio> elements with GainNode crossfade. If crossfadeSeconds = 0: gapless mode — next track starts with zero gap using precise AudioContext.currentTime scheduling. Both crossfade and gapless settings in Settings screen.
+ReplayGain: On playback start, read replayGain field from track record. Adjust GainNode accordingly to normalize perceived loudness across tracks. If no ReplayGain tag: apply -6db conservative default. Toggle in settings.
+Lock Screen / Headphones: Media Session API — registers artwork, title, artist. Working handlers for previoustrack, nexttrack, play, pause, seekbackward (−10s), seekforward (+10s). Hardware media buttons on headphones work correctly.
+Picture-in-Picture (video): When a video is playing, a floating mini video player (<video> using requestPictureInPicture API) allows user to navigate other tabs while video continues. Tap to expand back to full screen.
+
+LIBRARY TAB
+Four inner tabs: Downloads · Videos · Playlists · Stats
+Downloads:
+Search bar (local filter). Sort by: Recent / A-Z / Most Played / Artist / Genre / Duration / File Size.
+Each row: art, title, artist, duration, source badge, format badge (MP3/M4A/etc), three-dot menu: Add to Playlist / Edit Tags / Download Again / Move to Recycle Bin / Share.
+Swipe left → reveal Delete (moves to recycle bin).
+Long-press → multi-select mode → bulk add to playlist or bulk delete.
+Folder view toggle: switches from flat list to folder-tree view (grouped by Artist → Album).
+Duplicate detector: button in header scans for tracks with identical title+artist, highlights them for user to review and delete.
+Videos:
+Grid or list toggle. Each item: thumbnail, title, uploader, resolution badge, duration, source badge.
+Tap → full-screen video player with custom controls overlay + PiP button + subtitle toggle (if SRT was downloaded).
+Playlists:
+Grid of cards — 2×2 art collage cover, name, track count.
+
+Create New Playlist (prompt for name, optionally pick a cover from downloads).
+Smart Playlists section below regular playlists.
+Smart playlist builder: choose field (genre / artist / year / play count / liked / download date / tempo / duration), operator (equals / contains / greater than / less than / before / after), value. Multiple rules (AND logic). Sort by. Limit to N tracks. Auto-updates every app open.
+Collaborative playlist: toggle on a playlist → generates a local JSON export link. Friends import the .aura-playlist file. Not real-time — manual share and merge.
+
+Stats (Wrapped):
+Full visual stats screen, available year-round (not just annually).
+— Total listening time (minutes, formatted as hours)
+— Top 5 tracks (with play counts)
+— Top 5 artists
+— Top 3 genres with percentage breakdown (pie chart — canvas drawn)
+— Listening activity heatmap (GitHub-style grid: last 52 weeks, colored by daily listening minutes)
+— Longest listening streak (consecutive days with at least 1 play)
+— Most active listening hour (bar chart by hour of day)
+— First song ever played in AURA
+— "Your AURA Personality" — derived label from top genre mix (e.g. "Trap & Chill Hybrid", "Indie Soul Wanderer") — fun, shareable card
+— Share button: generates a stylized stats image card (canvas → PNG download) for sharing to socials
+
+SKIN EDITOR TAB
+Layout: Top 45% of screen — live phone mockup (Now Playing view, fully interactive). Bottom 55% — scrollable controls panel.
+Every control change reflects in the mockup with zero delay (CSS variable update on :root).
+Controls — Colors:
+— Primary accent — HSL color wheel picker (full saturation/lightness triangle inside hue wheel)
+— Secondary accent — same
+— Background style — 4 options:
+· Aurora Dynamic (default) — extracts from album art
+· Solid — color picker
+· Custom Image — upload from camera roll, displayed as blurred full-bleed background
+· Manual Gradient — pick 2 colors + angle slider
+— Text color — color picker with contrast ratio display (WCAG AA/AAA badge updates live)
+— Glass panel tint color — color picker
+— Glass panel opacity — slider 0–95%
+— Glass blur — slider 0–40px
+— Progress bar gradient start + end colors
+Controls — Typography:
+— Font family — 8 options, each name shown in its own font: Syne · Space Grotesk · Bebas Neue · DM Sans · Clash Display · Satoshi · Playfair Display · Fragment Mono
+— Font size scale — slider: 85% / 100% / 110% / 125%
+— Letter spacing — slider: tight / normal / wide / very wide
+— Text glow intensity — slider (0 = no glow, 100 = heavy glow using text-shadow in accent color)
+Controls — Visualizer:
+— Style: Circular Rings / Bar Spectrum / Waveform / Floating Particles / DNA Helix / None
+— Color mode: Matches aurora / Fixed accent / Rainbow cycle / White only
+— Intensity — slider (subtle to wild)
+— Size — slider (small orbit / medium / full screen fill)
+Controls — Album Art:
+— Size — slider (small / medium / large / full-bleed)
+— Shape — Square / Rounded Square / Circle / Blob (CSS clip-path organic blob)
+— Rotation — toggle
+— Glow — toggle + intensity slider
+— Reflection — toggle (faded upside-down ghost of art below, like Apple TV)
+— 3D tilt — toggle (gyroscope-based tilt using DeviceOrientation API — art tilts as you move phone)
+Controls — Controls Layout:
+— Button style: Pill / Square / Circle / Ghost (outline) / Text-only
+— Button size: Compact / Normal / Large
+— Controls position: Bottom / Floating over art
+— Show/hide each secondary control (shuffle, like, download, bookmark, loop) — individual toggles
+Controls — Effects:
+— Pulse on beat — toggle (whole UI scales ±1% on beat, detected via AnalyserNode peak)
+— Album art shake on skip — toggle (quick CSS shake animation when skipping)
+— Scanline overlay — toggle (CRT scanline texture via repeating linear-gradient)
+— Grain overlay — toggle + intensity (SVG feTurbulence filter noise over UI)
+— Bloom blur — toggle (additional blurred copy of visualizer behind it for glow depth)
+— Color shift on hour — toggle (accent color slowly rotates hue 1 degree per minute — over 6hrs the whole app gently shifts color)
+Controls — Mini Player:
+— Mini player style: Standard (thumbnail + text + controls) / Slim (just progress line + play button) / Floating bubble (circular album art button that hovers over all tabs)
+Skins Management:
+— Save current skin (prompt name)
+— Saved skins grid — tap to apply (shows before/after live in mockup)
+— Export skin → downloads .aura file (JSON)
+— Import skin → upload .aura file from friend
+— Reset to VOID
+— Built-in preset skins to start from: VOID (default) · CHROME (Y2K silver) · EMBER (warm orange/red) · ARCTIC (ice blue/white) · MATRIX (green on black) · COTTON (soft pastel pink)
+All skin properties live in a single JSON object in IndexedDB. On app load, active skin JSON is read, all CSS custom properties set on :root. Every component in the app reads only CSS variables — zero hardcoded colors anywhere.
+
+SETTINGS SCREEN (accessible from Library tab header)
+Playback: Crossfade seconds (0–12) · Gapless toggle · ReplayGain toggle · Autoplay next toggle · Smart queue toggle · Resume on open toggle
+Audio: Default EQ preset · Pitch default · Tempo default · Balance default · Mono mix default
+Downloads: Default quality · Default format · WiFi only toggle · Max file size limit · Download folder path display · Auto-tag downloads toggle
+Discovery: Discover Weekly auto-generate on Monday toggle · Daily Mix count (3–6) · Mood feed chips — show/hide individual moods
+Privacy: Private session toggle (history paused, no stats update) · Clear all history · Export all data as JSON · Delete all data
+Appearance: Link to Skin Editor
+About: AURA version, yt-dlp version (fetched from server), Piped instance URL (editable — user can switch Piped instances if one goes down), recycle bin size + clear button
+
+Default Skin — "VOID"
+json{
+  "id": "void-default",
+  "name": "VOID",
+  "backgroundStyle": "aurora-dynamic",
+  "backgroundColor": "#080810",
+  "accentPrimary": "#B347FF",
+  "accentSecondary": "#FF3CAC",
+  "textColor": "#F0F0FF",
+  "glassTint": "rgba(8,8,16,0.58)",
+  "glassBlur": "24px",
+  "glassOpacity": 0.58,
+  "progressStart": "#B347FF",
+  "progressEnd": "#FF3CAC",
+  "fontFamily": "Syne",
+  "fontSizeScale": 1.0,
+  "letterSpacing": "0.01em",
+  "textGlow": 0.4,
+  "visualizerStyle": "circular-rings",
+  "visualizerColorMode": "aurora-match",
+  "visualizerIntensity": 0.75,
+  "visualizerSize": "medium",
+  "albumArtSize": "large",
+  "albumArtShape": "rounded-square",
+  "albumArtRotation": false,
+  "albumArtGlow": true,
+  "albumArtGlowIntensity": 0.8,
+  "albumArtReflection": true,
+  "albumArt3DTilt": true,
+  "buttonStyle": "pill",
+  "buttonSize": "normal",
+  "controlsPosition": "bottom",
+  "pulseOnBeat": true,
+  "albumArtShakeOnSkip": true,
+  "scanlineOverlay": false,
+  "grainOverlay": false,
+  "grainIntensity": 0,
+  "bloomBlur": true,
+  "colorShiftOnHour": false,
+  "miniPlayerStyle": "standard"
+}
+
+PWA Configuration
+manifest.json: name "AURA", short_name "AURA", display "standalone", orientation "portrait", theme_color "#080810", background_color "#080810", start_url "/", icons 192px + 512px (glowing purple orb, pure CSS rendered to canvas and saved as PNG at build time).
+Service Worker: pre-cache full app shell on install. Runtime cache /api/trending and /api/related/* for 60 seconds. Serve cached shell when offline with an "Offline — your downloads still work" banner. Background sync: if a download was triggered while offline, queue the request and retry automatically when connection restores.
+
+Critical Implementation Rules
+
+All backend API calls from frontend go to /api/* on same Replit origin — no CORS ever
+All audio and video blobs stored as Uint8Array in IndexedDB — never as ObjectURLs that expire on page reload
+Recreate ObjectURL from Uint8Array only at playback time: URL.createObjectURL(new Blob([uint8array]))
+Every CSS color, font, radius, and effect reads from a CSS custom property set by the skin loader — zero hardcoded colors in component styles
+Touch targets minimum 44×44px everywhere
+All animations respect prefers-reduced-motion — disable non-essential motion if set
+requestAnimationFrame used for all visualizer drawing — never setInterval
+Debounce search input 400ms
+Portrait and landscape orientation both supported
+No console.log in production
+yt-dlp auto-updates on server restart via yt-dlp -U in startup script
+Piped instance failover: if primary returns error 3 times, switch to fallback instance automatically

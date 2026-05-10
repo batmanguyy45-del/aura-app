@@ -1,0 +1,363 @@
+import { Router } from "express";
+import { spawn } from "child_process";
+import { Readable } from "stream";
+import rateLimit from "express-rate-limit";
+import type { Request, Response } from "express";
+
+const router = Router();
+
+const limiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+router.use(limiter);
+
+const ytdlp = process.env.YT_DLP_PATH ?? "yt-dlp";
+
+// Simple in-memory TTL cache
+const cache = new Map<string, { data: unknown; exp: number }>();
+function getCache<T>(key: string): T | undefined {
+  const entry = cache.get(key);
+  if (!entry || entry.exp < Date.now()) {
+    cache.delete(key);
+    return undefined;
+  }
+  return entry.data as T;
+}
+function setCache(key: string, data: unknown, ttlMs = 5 * 60 * 1000) {
+  cache.set(key, { data, exp: Date.now() + ttlMs });
+}
+
+// Run yt-dlp, return stdout as string
+function ytdlpRun(args: string[], timeoutMs = 30_000): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(ytdlp, args, { timeout: timeoutMs });
+    let out = "";
+    let err = "";
+    proc.stdout.on("data", (d: Buffer) => { out += d.toString(); });
+    proc.stderr.on("data", (d: Buffer) => { err += d.toString(); });
+    proc.on("close", (code) => {
+      if (code === 0) resolve(out);
+      else reject(new Error(err.split("\n").slice(-3).join(" ") || `exit ${code}`));
+    });
+    proc.on("error", reject);
+  });
+}
+
+// Parse flat-playlist JSON lines into track array
+function parseFlatLines(jsonLines: string) {
+  return jsonLines
+    .split("\n")
+    .filter(Boolean)
+    .map(line => {
+      try {
+        const d = JSON.parse(line) as Record<string, unknown>;
+        const thumb = (Array.isArray(d.thumbnails) && d.thumbnails.length > 0)
+          ? String((d.thumbnails as Record<string, unknown>[])[0].url ?? "")
+          : `https://i.ytimg.com/vi/${d.id}/hqdefault.jpg`;
+        return {
+          id: String(d.id ?? ""),
+          title: String(d.title ?? ""),
+          artist: String(d.uploader ?? d.channel ?? ""),
+          duration: Number(d.duration ?? 0),
+          thumbnail: thumb,
+          views: Number(d.view_count ?? 0),
+          type: "track",
+        };
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
+// Auto-update yt-dlp on startup (non-blocking)
+try { spawn(ytdlp, ["-U"], { stdio: "ignore" }); } catch {}
+
+// ── Routes ──────────────────────────────────────────────────────────────────
+
+// GET /trending
+router.get("/trending", async (req: Request, res: Response) => {
+  const cached = getCache<unknown[]>("trending");
+  if (cached) return void res.json(cached);
+  try {
+    const out = await ytdlpRun([
+      "ytsearch20:trending music 2026",
+      "--dump-json",
+      "--flat-playlist",
+      "--no-playlist",
+      "--no-warnings",
+    ], 40_000);
+    const tracks = parseFlatLines(out);
+    setCache("trending", tracks, 10 * 60 * 1000);
+    res.json(tracks);
+  } catch (err) {
+    req.log.error({ err }, "trending error");
+    res.status(500).json({ error: "Failed to fetch trending" });
+  }
+});
+
+// GET /search?q=&filter=
+router.get("/search", async (req: Request, res: Response) => {
+  const { q, filter = "all" } = req.query;
+  if (!q) return void res.status(400).json({ error: "q is required" });
+  const key = `search:${q}:${filter}`;
+  const cached = getCache<unknown[]>(key);
+  if (cached) return void res.json(cached);
+  try {
+    const filterSuffix =
+      filter === "music" ? " music" : filter === "videos" ? "" : " music";
+    const searchQuery = `ytsearch20:${String(q)}${filterSuffix}`;
+    const out = await ytdlpRun([
+      searchQuery,
+      "--dump-json",
+      "--flat-playlist",
+      "--no-playlist",
+      "--no-warnings",
+    ], 40_000);
+    const tracks = parseFlatLines(out);
+    setCache(key, tracks, 5 * 60 * 1000);
+    res.json(tracks);
+  } catch (err) {
+    req.log.error({ err }, "search error");
+    res.status(500).json({ error: "Search failed" });
+  }
+});
+
+// GET /stream/:videoId  — proxy best audio stream
+router.get("/stream/:videoId", async (req: Request, res: Response) => {
+  const { videoId } = req.params;
+  try {
+    // Get best audio-only URL from yt-dlp
+    const urlOut = await ytdlpRun([
+      "-g",
+      "-f", "bestaudio/best",
+      "--no-playlist",
+      "--no-warnings",
+      `https://www.youtube.com/watch?v=${videoId}`,
+    ], 20_000);
+    const streamUrl = urlOut.trim().split("\n")[0];
+    if (!streamUrl) throw new Error("No stream URL");
+
+    const upstreamHeaders: Record<string, string> = {
+      "User-Agent": "Mozilla/5.0",
+    };
+    if (req.headers.range) upstreamHeaders["Range"] = req.headers.range;
+
+    const upstream = await fetch(streamUrl, { headers: upstreamHeaders });
+    if (!upstream.body) throw new Error("No body");
+
+    res.status(req.headers.range ? 206 : 200);
+    const ct = upstream.headers.get("content-type") ?? "audio/webm";
+    res.setHeader("Content-Type", ct);
+    res.setHeader("Accept-Ranges", "bytes");
+    res.setHeader("Cache-Control", "no-cache");
+
+    const cl = upstream.headers.get("content-length");
+    if (cl) res.setHeader("Content-Length", cl);
+    const cr = upstream.headers.get("content-range");
+    if (cr) res.setHeader("Content-Range", cr);
+
+    const readable = Readable.fromWeb(
+      upstream.body as Parameters<typeof Readable.fromWeb>[0]
+    );
+    readable.pipe(res);
+    req.on("close", () => readable.destroy());
+  } catch (err) {
+    req.log.error({ err }, "stream error");
+    if (!res.headersSent) res.status(500).json({ error: "Stream failed" });
+  }
+});
+
+// GET /related/:videoId  — search based on track info
+router.get("/related/:videoId", async (req: Request, res: Response) => {
+  const { videoId } = req.params;
+  const key = `related:${videoId}`;
+  const cached = getCache<unknown[]>(key);
+  if (cached) return void res.json(cached);
+  try {
+    // Get video title to find related
+    const infoOut = await ytdlpRun([
+      "--dump-json",
+      "--no-playlist",
+      "--no-warnings",
+      `https://www.youtube.com/watch?v=${videoId}`,
+    ], 20_000);
+    const info = JSON.parse(infoOut.trim().split("\n")[0]) as Record<string, unknown>;
+    const artist = String(info.uploader ?? info.channel ?? "");
+    const searchTerm = artist || "music";
+
+    const out = await ytdlpRun([
+      `ytsearch15:${searchTerm} music`,
+      "--dump-json",
+      "--flat-playlist",
+      "--no-playlist",
+      "--no-warnings",
+    ], 30_000);
+    const tracks = parseFlatLines(out);
+    setCache(key, tracks, 10 * 60 * 1000);
+    res.json(tracks);
+  } catch (err) {
+    req.log.error({ err }, "related error");
+    res.status(500).json({ error: "Failed to fetch related" });
+  }
+});
+
+// GET /lyrics?title=&artist=
+router.get("/lyrics", async (req: Request, res: Response) => {
+  const { title, artist = "unknown" } = req.query;
+  if (!title) return void res.status(400).json({ error: "title required" });
+  try {
+    const url = `https://api.lyrics.ovh/v1/${encodeURIComponent(
+      String(artist)
+    )}/${encodeURIComponent(String(title))}`;
+    const resp = await fetch(url, { signal: AbortSignal.timeout(8_000) });
+    if (!resp.ok) throw new Error("not found");
+    const data = (await resp.json()) as { lyrics?: string };
+    res.json({ lyrics: data.lyrics ?? "" });
+  } catch {
+    res.json({ lyrics: "" });
+  }
+});
+
+// GET /info?url=  — yt-dlp metadata for any URL
+router.get("/info", async (req: Request, res: Response) => {
+  const { url } = req.query;
+  if (!url) return void res.status(400).json({ error: "url required" });
+  try {
+    const out = await ytdlpRun([
+      "--dump-json",
+      "--no-playlist",
+      "--no-warnings",
+      String(url),
+    ], 30_000);
+    const p = JSON.parse(out.trim().split("\n")[0]) as Record<string, unknown>;
+    res.json({
+      title: String(p.title ?? ""),
+      uploader: String(p.uploader ?? p.channel ?? ""),
+      duration: Number(p.duration ?? 0),
+      thumbnail: String(p.thumbnail ?? ""),
+      formats: (
+        (p.formats as Record<string, unknown>[] | undefined) ?? []
+      ).map((f) => ({
+        format_id: f.format_id,
+        height: f.height,
+        ext: f.ext,
+        tbr: f.tbr,
+        acodec: f.acodec,
+      })),
+      site_name: String(p.extractor_key ?? p.extractor ?? "Unknown"),
+      subtitles: (p.subtitles as Record<string, unknown> | undefined) ?? {},
+    });
+  } catch (err) {
+    req.log.error({ err }, "info error");
+    res.status(500).json({ error: "Failed to fetch URL info" });
+  }
+});
+
+// POST /download  — stream download via yt-dlp stdout
+router.post("/download", (req: Request, res: Response) => {
+  const {
+    url,
+    format = "mp3",
+    quality = "audio-only",
+  } = req.body as { url?: string; format?: string; quality?: string };
+  if (!url) return void res.status(400).json({ error: "url required" });
+
+  const args: string[] = ["--no-playlist", "--max-filesize", "800m", "--no-warnings"];
+
+  if (quality === "audio-only" || format === "mp3" || format === "m4a") {
+    args.push(
+      "-x",
+      "--audio-format", format === "m4a" ? "m4a" : "mp3",
+      "--audio-quality", "0"
+    );
+  } else {
+    const heights: Record<string, string> = {
+      "360p": "360", "480p": "480", "720p": "720",
+      "1080p": "1080", "1440p": "1440", "2160p": "2160",
+    };
+    const h = heights[quality] ?? "720";
+    args.push(
+      "-f", `bestvideo[height<=${h}]+bestaudio/best[height<=${h}]`,
+      "--merge-output-format", format === "mp4" ? "mp4" : "webm"
+    );
+  }
+
+  const ext =
+    quality === "audio-only"
+      ? format === "m4a" ? "m4a" : "mp3"
+      : format === "mp4" ? "mp4" : "webm";
+
+  res.setHeader("Content-Disposition", `attachment; filename="download.${ext}"`);
+  res.setHeader(
+    "Content-Type",
+    ext === "mp3" ? "audio/mpeg" : ext === "m4a" ? "audio/mp4" : "video/mp4"
+  );
+
+  args.push("-o", "-", url);
+  const proc = spawn(ytdlp, args);
+  proc.stdout.pipe(res);
+  proc.on("error", (err) => {
+    req.log.error({ err }, "download error");
+    if (!res.headersSent) res.status(500).json({ error: "Download failed" });
+  });
+  req.on("close", () => proc.kill());
+});
+
+// GET /suggest?q=  — simple YouTube search-based suggestions
+router.get("/suggest", async (req: Request, res: Response) => {
+  const { q } = req.query;
+  if (!q) return void res.json([]);
+  const key = `suggest:${q}`;
+  const cached = getCache<string[]>(key);
+  if (cached) return void res.json(cached);
+  // Generate simple suffix-based suggestions
+  const base = String(q);
+  const suggestions = [
+    base,
+    `${base} remix`,
+    `${base} acoustic`,
+    `${base} live`,
+    `${base} official`,
+    `${base} lyrics`,
+  ].slice(0, 6);
+  setCache(key, suggestions, 5 * 60 * 1000);
+  res.json(suggestions);
+});
+
+// GET /artist?id=  — search by channel/artist name
+router.get("/artist", async (req: Request, res: Response) => {
+  const { id } = req.query;
+  if (!id) return void res.status(400).json({ error: "id required" });
+  const key = `artist:${id}`;
+  const cached = getCache<unknown>(key);
+  if (cached) return void res.json(cached);
+  try {
+    const out = await ytdlpRun([
+      `ytsearch20:${String(id)} official music`,
+      "--dump-json",
+      "--flat-playlist",
+      "--no-playlist",
+      "--no-warnings",
+    ], 30_000);
+    const tracks = parseFlatLines(out);
+    const result = {
+      name: String(id),
+      avatar: "",
+      subscribers: 0,
+      description: "",
+      topTracks: tracks,
+    };
+    setCache(key, result, 10 * 60 * 1000);
+    res.json(result);
+  } catch (err) {
+    req.log.error({ err }, "artist error");
+    res.status(500).json({ error: "Failed to fetch artist" });
+  }
+});
+
+export default router;
