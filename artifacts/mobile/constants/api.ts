@@ -1,7 +1,7 @@
 export function getApiBase(): string {
-  const domain = process.env.EXPO_PUBLIC_DOMAIN;
-  if (domain) {
-    return `https://${domain}/api`;
+  const apiDomain = process.env.EXPO_PUBLIC_API_DOMAIN || process.env.EXPO_PUBLIC_DOMAIN;
+  if (apiDomain) {
+    return `https://${apiDomain}/api`;
   }
   return '/api';
 }
