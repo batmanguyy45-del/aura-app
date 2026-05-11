@@ -127,52 +127,99 @@ router.get("/search", async (req: Request, res: Response) => {
   }
 });
 
-// GET /stream/:videoId — redirect client directly to audio URL
+// GET /stream/:videoId — multi-strategy audio URL resolver
 router.get("/stream/:videoId", async (req: Request, res: Response) => {
   const { videoId } = req.params;
+  const errors: string[] = [];
+
+  // Strategy 1: Multiple Piped instances
   const PIPED_INSTANCES = [
     process.env.PIPED_API,
     "https://pipedapi.kavin.rocks",
     "https://piped-api.privacy.com.de",
     "https://api.piped.yt",
     "https://pipedapi.tokhmi.xyz",
+    "https://pipedapi.mha.fi",
   ].filter(Boolean) as string[];
 
   for (const instance of PIPED_INSTANCES) {
     try {
       const resp = await fetch(`${instance}/streams/${videoId}`, {
-        signal: AbortSignal.timeout(8_000),
-        headers: { "User-Agent": "Mozilla/5.0" },
+        signal: AbortSignal.timeout(6_000),
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
       });
       if (resp.ok) {
-        const data = await resp.json() as {
-          audioStreams: Array<{ url: string; mimeType: string; bitrate: number }>;
-        };
+        const data = await resp.json() as { audioStreams: Array<{ url: string; mimeType: string; bitrate: number }> };
         const best = (data.audioStreams ?? []).sort((a, b) => b.bitrate - a.bitrate)[0];
         if (best?.url) {
+          req.log.info({ instance }, "stream via Piped");
           res.setHeader("Access-Control-Allow-Origin", "*");
           return res.redirect(302, best.url);
         }
+      } else {
+        errors.push(`Piped ${instance}: HTTP ${resp.status}`);
       }
-    } catch {}
+    } catch (e: unknown) {
+      errors.push(`Piped ${instance}: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
-  try {
-    const urlOut = await ytdlpRun([
-      "-g", "-f", "bestaudio/best",
-      "--extractor-args", "youtube:player_client=android,web",
-      "--no-playlist", "--no-warnings",
-      `https://www.youtube.com/watch?v=${videoId}`,
-    ], 20_000);
-    const url = urlOut.trim().split("\n")[0];
-    if (url) {
-      res.setHeader("Access-Control-Allow-Origin", "*");
-      return res.redirect(302, url);
+  // Strategy 2: Invidious instances
+  const INVIDIOUS = [
+    "https://invidious.snopyta.org",
+    "https://vid.puffyan.us",
+    "https://yt.artemislena.eu",
+    "https://invidious.tiekoetter.com",
+  ];
+  for (const instance of INVIDIOUS) {
+    try {
+      const resp = await fetch(`${instance}/api/v1/videos/${videoId}?fields=adaptiveFormats`, {
+        signal: AbortSignal.timeout(6_000),
+        headers: { "User-Agent": "Mozilla/5.0" },
+      });
+      if (resp.ok) {
+        const data = await resp.json() as { adaptiveFormats: Array<{ url: string; type: string; bitrate: number }> };
+        const audio = (data.adaptiveFormats ?? [])
+          .filter(f => f.type?.includes("audio"))
+          .sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0))[0];
+        if (audio?.url) {
+          req.log.info({ instance }, "stream via Invidious");
+          res.setHeader("Access-Control-Allow-Origin", "*");
+          return res.redirect(302, audio.url);
+        }
+      } else {
+        errors.push(`Invidious ${instance}: HTTP ${resp.status}`);
+      }
+    } catch (e: unknown) {
+      errors.push(`Invidious ${instance}: ${e instanceof Error ? e.message : String(e)}`);
     }
-  } catch {}
+  }
 
-  res.status(500).json({ error: "Stream failed" });
+  // Strategy 3: yt-dlp with multiple player clients
+  const CLIENTS = ["ios", "android", "tv_embedded", "mweb", "web"];
+  for (const client of CLIENTS) {
+    try {
+      const urlOut = await ytdlpRun([
+        "-g", "-f", "bestaudio/best",
+        "--extractor-args", `youtube:player_client=${client}`,
+        "--no-playlist", "--no-warnings",
+        `https://www.youtube.com/watch?v=${videoId}`,
+      ], 15_000);
+      const url = urlOut.trim().split("\n")[0];
+      if (url) {
+        req.log.info({ client }, "stream via yt-dlp");
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        return res.redirect(302, url);
+      }
+    } catch (e: unknown) {
+      errors.push(`yt-dlp ${client}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  req.log.error({ errors }, "all stream strategies failed");
+  res.status(500).json({ error: "Stream failed", strategies_tried: errors });
 });
+
 
 
 // Diverse genre seeds so related always mixes things up

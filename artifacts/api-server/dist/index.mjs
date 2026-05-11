@@ -34323,7 +34323,6 @@ var health_default = router;
 // src/routes/aura.ts
 var import_express2 = __toESM(require_express2(), 1);
 import { spawn } from "child_process";
-import { Readable } from "stream";
 
 // ../../node_modules/.pnpm/express-rate-limit@8.5.1_express@5.2.1/node_modules/express-rate-limit/dist/index.mjs
 var import_ip_address = __toESM(require_ip_address(), 1);
@@ -35386,41 +35385,49 @@ router2.get("/search", async (req, res) => {
 });
 router2.get("/stream/:videoId", async (req, res) => {
   const { videoId } = req.params;
+  const PIPED_INSTANCES = [
+    process.env.PIPED_API,
+    "https://pipedapi.kavin.rocks",
+    "https://piped-api.privacy.com.de",
+    "https://api.piped.yt",
+    "https://pipedapi.tokhmi.xyz"
+  ].filter(Boolean);
+  for (const instance of PIPED_INSTANCES) {
+    try {
+      const resp = await fetch(`${instance}/streams/${videoId}`, {
+        signal: AbortSignal.timeout(8e3),
+        headers: { "User-Agent": "Mozilla/5.0" }
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        const best = (data.audioStreams ?? []).sort((a, b) => b.bitrate - a.bitrate)[0];
+        if (best?.url) {
+          res.setHeader("Access-Control-Allow-Origin", "*");
+          return res.redirect(302, best.url);
+        }
+      }
+    } catch {
+    }
+  }
   try {
     const urlOut = await ytdlpRun([
       "-g",
       "-f",
       "bestaudio/best",
+      "--extractor-args",
+      "youtube:player_client=android,web",
       "--no-playlist",
       "--no-warnings",
       `https://www.youtube.com/watch?v=${videoId}`
     ], 2e4);
-    const streamUrl = urlOut.trim().split("\n")[0];
-    if (!streamUrl) throw new Error("No stream URL");
-    const upstreamHeaders = {
-      "User-Agent": "Mozilla/5.0"
-    };
-    if (req.headers.range) upstreamHeaders["Range"] = req.headers.range;
-    const upstream = await fetch(streamUrl, { headers: upstreamHeaders });
-    if (!upstream.body) throw new Error("No body");
-    res.status(req.headers.range ? 206 : 200);
-    const ct = upstream.headers.get("content-type") ?? "audio/webm";
-    res.setHeader("Content-Type", ct);
-    res.setHeader("Accept-Ranges", "bytes");
-    res.setHeader("Cache-Control", "no-cache");
-    const cl = upstream.headers.get("content-length");
-    if (cl) res.setHeader("Content-Length", cl);
-    const cr = upstream.headers.get("content-range");
-    if (cr) res.setHeader("Content-Range", cr);
-    const readable = Readable.fromWeb(
-      upstream.body
-    );
-    readable.pipe(res);
-    req.on("close", () => readable.destroy());
-  } catch (err) {
-    req.log.error({ err }, "stream error");
-    if (!res.headersSent) res.status(500).json({ error: "Stream failed" });
+    const url = urlOut.trim().split("\n")[0];
+    if (url) {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      return res.redirect(302, url);
+    }
+  } catch {
   }
+  res.status(500).json({ error: "Stream failed" });
 });
 var GENRE_SEEDS = [
   "indie pop hits",
