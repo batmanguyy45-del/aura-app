@@ -130,7 +130,13 @@ router.get("/search", async (req: Request, res: Response) => {
 // GET /stream/:videoId  — Piped first, yt-dlp fallback
 router.get("/stream/:videoId", async (req: Request, res: Response) => {
   const { videoId } = req.params;
-  const PIPED_API = process.env.PIPED_API ?? "https://pipedapi.kavin.rocks";
+  const PIPED_INSTANCES = [
+    process.env.PIPED_API,
+    "https://pipedapi.kavin.rocks",
+    "https://piped-api.privacy.com.de",
+    "https://api.piped.yt",
+    "https://pipedapi.tokhmi.xyz",
+  ].filter(Boolean) as string[];
 
   async function getStreamUrl(): Promise<{ url: string; mimeType: string }> {
     // Try Piped first — no bot detection, faster
@@ -153,6 +159,7 @@ router.get("/stream/:videoId", async (req: Request, res: Response) => {
     // Fallback to yt-dlp
     const urlOut = await ytdlpRun([
       "-g", "-f", "bestaudio/best",
+      "--extractor-args", "youtube:player_client=android,web",
       "--no-playlist", "--no-warnings",
       `https://www.youtube.com/watch?v=${videoId}`,
     ], 20_000);
