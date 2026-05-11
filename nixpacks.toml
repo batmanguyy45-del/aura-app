@@ -2,7 +2,7 @@
 nixPkgs = ["nodejs_22", "nodePackages.pnpm", "python311", "ffmpeg"]
 
 [phases.install]
-cmds = ["pnpm install --no-frozen-lockfile", "pip install yt-dlp"]
+cmds = ["pnpm install --no-frozen-lockfile", "python3 -m pip install yt-dlp"]
 
 [phases.build]
 cmds = ["pnpm --filter @workspace/api-server run build"]
