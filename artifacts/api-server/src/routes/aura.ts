@@ -127,7 +127,7 @@ router.get("/search", async (req: Request, res: Response) => {
   }
 });
 
-// GET /stream/:videoId  — Piped first, yt-dlp fallback
+// GET /stream/:videoId — redirect client directly to audio URL
 router.get("/stream/:videoId", async (req: Request, res: Response) => {
   const { videoId } = req.params;
   const PIPED_INSTANCES = [
@@ -138,25 +138,26 @@ router.get("/stream/:videoId", async (req: Request, res: Response) => {
     "https://pipedapi.tokhmi.xyz",
   ].filter(Boolean) as string[];
 
-  async function getStreamUrl(): Promise<{ url: string; mimeType: string }> {
-    // Try Piped first — no bot detection, faster
+  for (const instance of PIPED_INSTANCES) {
     try {
-      const pipedResp = await fetch(`${PIPED_API}/streams/${videoId}`, {
-        signal: AbortSignal.timeout(10_000),
+      const resp = await fetch(`${instance}/streams/${videoId}`, {
+        signal: AbortSignal.timeout(8_000),
         headers: { "User-Agent": "Mozilla/5.0" },
       });
-      if (pipedResp.ok) {
-        const data = await pipedResp.json() as {
+      if (resp.ok) {
+        const data = await resp.json() as {
           audioStreams: Array<{ url: string; mimeType: string; bitrate: number }>;
         };
-        if (data.audioStreams?.length) {
-          const best = data.audioStreams.sort((a, b) => b.bitrate - a.bitrate)[0];
-          if (best?.url) return { url: best.url, mimeType: best.mimeType ?? "audio/mp4" };
+        const best = (data.audioStreams ?? []).sort((a, b) => b.bitrate - a.bitrate)[0];
+        if (best?.url) {
+          res.setHeader("Access-Control-Allow-Origin", "*");
+          return res.redirect(302, best.url);
         }
       }
     } catch {}
+  }
 
-    // Fallback to yt-dlp
+  try {
     const urlOut = await ytdlpRun([
       "-g", "-f", "bestaudio/best",
       "--extractor-args", "youtube:player_client=android,web",
@@ -164,36 +165,15 @@ router.get("/stream/:videoId", async (req: Request, res: Response) => {
       `https://www.youtube.com/watch?v=${videoId}`,
     ], 20_000);
     const url = urlOut.trim().split("\n")[0];
-    if (!url) throw new Error("No stream URL");
-    return { url, mimeType: "audio/webm" };
-  }
+    if (url) {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      return res.redirect(302, url);
+    }
+  } catch {}
 
-  try {
-    const { url: streamUrl, mimeType } = await getStreamUrl();
-
-    const upstreamHeaders: Record<string, string> = { "User-Agent": "Mozilla/5.0" };
-    if (req.headers.range) upstreamHeaders["Range"] = req.headers.range;
-
-    const upstream = await fetch(streamUrl, { headers: upstreamHeaders });
-    if (!upstream.body) throw new Error("No body");
-
-    res.status(req.headers.range ? 206 : 200);
-    res.setHeader("Content-Type", upstream.headers.get("content-type") ?? mimeType);
-    res.setHeader("Accept-Ranges", "bytes");
-    res.setHeader("Cache-Control", "no-cache");
-    const cl = upstream.headers.get("content-length");
-    if (cl) res.setHeader("Content-Length", cl);
-    const cr = upstream.headers.get("content-range");
-    if (cr) res.setHeader("Content-Range", cr);
-
-    const readable = Readable.fromWeb(upstream.body as Parameters<typeof Readable.fromWeb>[0]);
-    readable.pipe(res);
-    req.on("close", () => readable.destroy());
-  } catch (err) {
-    req.log.error({ err }, "stream error");
-    if (!res.headersSent) res.status(500).json({ error: "Stream failed" });
-  }
+  res.status(500).json({ error: "Stream failed" });
 });
+
 
 // Diverse genre seeds so related always mixes things up
 const GENRE_SEEDS = [
