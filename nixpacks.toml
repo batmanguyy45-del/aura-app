@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ["ffmpeg", "python311"]
+nixPkgs = ["nodejs_22", "nodePackages.pnpm", "python311", "ffmpeg"]
 
 [phases.install]
 cmds = ["pnpm install --no-frozen-lockfile", "pip install yt-dlp"]
