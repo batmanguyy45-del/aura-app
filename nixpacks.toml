@@ -1,8 +1,8 @@
 [phases.setup]
-nixPkgs = ["nodejs_22", "nodePackages.pnpm", "python311Full", "ffmpeg"]
+nixPkgs = ["nodejs_22", "nodePackages.pnpm", "ffmpeg", "yt-dlp"]
 
 [phases.install]
-cmds = ["pnpm install --no-frozen-lockfile", "python3 -m pip install yt-dlp --break-system-packages"]
+cmds = ["pnpm install --no-frozen-lockfile"]
 
 [phases.build]
 cmds = ["pnpm --filter @workspace/api-server run build"]
