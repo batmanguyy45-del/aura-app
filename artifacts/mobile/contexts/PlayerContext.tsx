@@ -19,6 +19,7 @@ export interface PlayerContextType {
   eqSettings: EQSettings;
   autoQueueActive: boolean;
   play: (track: QueueTrack, newQueue?: QueueTrack[], artistSeed?: string) => Promise<void>;
+  playAtIndex: (index: number) => Promise<void>;
   pause: () => Promise<void>;
   resume: () => Promise<void>;
   seek: (positionSeconds: number) => Promise<void>;
@@ -58,24 +59,95 @@ const DEFAULT_EQ: EQSettings = {
   balance: 0,
 };
 
-const RADIO_SEEDS = [
-  'top hits 2026',
-  'chill vibes mix',
-  'popular songs right now',
-  'indie music 2026',
-  'best pop songs 2026',
-  'viral music hits',
-  'alternative hits',
-  'r&b soul mix',
-  'electronic dance music',
-  'acoustic covers popular',
-];
+// ── Diverse seed pools — 80+ seeds across 9 categories ───────────────────────
+const SEED_POOLS: Record<string, string[]> = {
+  charts: [
+    'Billboard Hot 100 2026 playlist',
+    'Spotify Global Top 50 2026',
+    'YouTube Music trending hits 2026',
+    'Apple Music top songs 2026',
+    'most streamed songs worldwide 2026',
+    'viral hits 2026 playlist',
+  ],
+  hiphop: [
+    'hip hop rap 2026 mix playlist',
+    'trap music 2026 playlist',
+    'drill music 2026 mix',
+    'underground hip hop playlist',
+    'old school hip hop classics',
+    'boom bap rap mix',
+    'conscious rap music playlist',
+  ],
+  rnb: [
+    'r&b soul music playlist 2026',
+    'neo soul music mix',
+    'contemporary r&b hits 2026',
+    'smooth r&b vibes playlist',
+    'alternative r&b music',
+  ],
+  pop: [
+    'pop hits 2026 music playlist',
+    'indie pop music 2026 mix',
+    'electropop dance hits',
+    'bedroom pop chill music',
+    'art pop music mix',
+    'synth pop playlist',
+  ],
+  electronic: [
+    'electronic dance music mix 2026',
+    'deep house music playlist',
+    'lo-fi hip hop study beats',
+    'synthwave retrowave music mix',
+    'ambient electronic music',
+    'progressive house hits',
+    'chillstep music playlist',
+    'future bass music mix',
+  ],
+  global: [
+    'afrobeats hits 2026 mix',
+    'k-pop hits 2026 playlist',
+    'latin reggaeton hits 2026',
+    'dancehall riddim mix 2026',
+    'amapiano 2026 playlist',
+    'afropop music mix',
+    'bossa nova jazz music',
+    'cumbia music playlist',
+    'soca music mix',
+  ],
+  moods: [
+    'late night driving chill music',
+    'morning energy workout songs',
+    'study focus concentration music',
+    'rainy day cozy music playlist',
+    'feel good happy songs mix',
+    'road trip music playlist',
+    'heartbreak songs playlist',
+    'romantic love songs playlist',
+    'party songs 2026 mix',
+    'relaxing spa music',
+  ],
+  alternative: [
+    'indie alternative music 2026',
+    'post punk new wave playlist',
+    'shoegaze dream pop music',
+    'folk acoustic music playlist',
+    'emo music playlist',
+    'math rock music mix',
+    'lo-fi indie music',
+    'psychedelic rock playlist',
+  ],
+  decades: [
+    '90s greatest hits playlist',
+    '2000s throwback hits mix',
+    '2010s pop hits playlist',
+    '80s classic hits',
+    '70s soul funk classics',
+    '2000s r&b hits playlist',
+    '90s hip hop classics',
+  ],
+};
 
-function pickSeed(exclude: string[]): string {
-  const available = RADIO_SEEDS.filter(s => !exclude.includes(s));
-  const pool = available.length > 0 ? available : RADIO_SEEDS;
-  return pool[Math.floor(Math.random() * pool.length)];
-}
+const CATEGORY_KEYS = Object.keys(SEED_POOLS);
 
 // ── Media Session helpers ────────────────────────────────────────────────────
 
@@ -93,10 +165,7 @@ function updateMediaSessionMetadata(track: QueueTrack) {
       artist: track.artist,
       album: 'AURA',
       artwork: track.thumbnail
-        ? [
-            { src: track.thumbnail, sizes: '512x512', type: 'image/jpeg' },
-            { src: track.thumbnail, sizes: '256x256', type: 'image/jpeg' },
-          ]
+        ? [{ src: track.thumbnail, sizes: '512x512', type: 'image/jpeg' }]
         : [],
     });
   } catch {}
@@ -128,13 +197,19 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   const soundRef = useRef<Audio.Sound | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const loadGenRef = useRef(0);          // ← double-play guard
+  const loadGenRef = useRef(0);
   const queueRef = useRef(queue);
   const queueIndexRef = useRef(queueIndex);
   const repeatModeRef = useRef(repeatMode);
-  const usedSeedsRef = useRef<string[]>([]);
   const isFetchingMoreRef = useRef(false);
   const seenIdsRef = useRef<Set<string>>(new Set());
+  const usedSeedsRef = useRef<string[]>([]);
+  const catCursorRef = useRef(0);
+
+  const pauseRef = useRef<() => Promise<void>>();
+  const resumeRef = useRef<() => Promise<void>>();
+  const nextRef = useRef<() => Promise<void>>();
+  const prevRef = useRef<() => Promise<void>>();
 
   queueRef.current = queue;
   queueIndexRef.current = queueIndex;
@@ -152,12 +227,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // ── Media Session action handlers (registered once) ─────────────────────
-  const pauseRef = useRef<() => Promise<void>>();
-  const resumeRef = useRef<() => Promise<void>>();
-  const nextRef = useRef<() => Promise<void>>();
-  const prevRef = useRef<() => Promise<void>>();
-
+  // ── MediaSession handlers (once) ─────────────────────────────────────────
   useEffect(() => {
     if (!isMediaSessionAvailable()) return;
     try {
@@ -169,47 +239,73 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     } catch {}
     return () => {
       if (!isMediaSessionAvailable()) return;
-      try {
-        (['play', 'pause', 'nexttrack', 'previoustrack', 'stop'] as MediaSessionAction[])
-          .forEach(a => { try { navigator.mediaSession.setActionHandler(a, null); } catch {} });
-      } catch {}
+      (['play', 'pause', 'nexttrack', 'previoustrack', 'stop'] as MediaSessionAction[])
+        .forEach(a => { try { navigator.mediaSession.setActionHandler(a, null); } catch {} });
     };
   }, []);
 
-  // ── Sync MediaSession metadata & playback state ─────────────────────────
-  useEffect(() => {
-    if (currentTrack) updateMediaSessionMetadata(currentTrack);
-  }, [currentTrack]);
+  useEffect(() => { if (currentTrack) updateMediaSessionMetadata(currentTrack); }, [currentTrack]);
+  useEffect(() => { setMediaSessionState(isPlaying); }, [isPlaying]);
 
-  useEffect(() => {
-    setMediaSessionState(isPlaying);
-  }, [isPlaying]);
-
-  // ── Helpers ─────────────────────────────────────────────────────────────
+  // ── Helpers ──────────────────────────────────────────────────────────────
   const clearInterval_ = () => {
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    }
+    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
   };
 
+  // ── Diverse queue fetcher ────────────────────────────────────────────────
   const fetchMoreTracks = useCallback(async (seedQuery?: string) => {
     if (isFetchingMoreRef.current) return;
     isFetchingMoreRef.current = true;
     try {
-      const seed = seedQuery ?? pickSeed(usedSeedsRef.current);
-      usedSeedsRef.current.push(seed);
-      if (usedSeedsRef.current.length > 8) usedSeedsRef.current.shift();
+      let seed1: string;
+      let seed2: string;
 
-      const resp = await fetch(
-        `${getApiBase()}/search?q=${encodeURIComponent(seed)}&filter=music`
-      );
-      if (!resp.ok) return;
-      const data = (await resp.json()) as QueueTrack[];
-      if (!Array.isArray(data)) return;
+      if (seedQuery) {
+        seed1 = seedQuery;
+        // Pick a random category for the second parallel fetch
+        const cat = CATEGORY_KEYS[Math.floor(Math.random() * CATEGORY_KEYS.length)];
+        const pool = SEED_POOLS[cat];
+        seed2 = pool[Math.floor(Math.random() * pool.length)];
+      } else {
+        // Rotate through categories for maximum diversity
+        const cat1 = CATEGORY_KEYS[catCursorRef.current % CATEGORY_KEYS.length];
+        catCursorRef.current++;
+        const cat2 = CATEGORY_KEYS[catCursorRef.current % CATEGORY_KEYS.length];
+        catCursorRef.current++;
 
-      const fresh = data.filter(t => !seenIdsRef.current.has(t.id));
+        const pool1 = SEED_POOLS[cat1];
+        const pool2 = SEED_POOLS[cat2];
+
+        const avail1 = pool1.filter(s => !usedSeedsRef.current.includes(s));
+        const avail2 = pool2.filter(s => !usedSeedsRef.current.includes(s));
+
+        seed1 = avail1.length > 0 ? avail1[Math.floor(Math.random() * avail1.length)] : pool1[Math.floor(Math.random() * pool1.length)];
+        seed2 = avail2.length > 0 ? avail2[Math.floor(Math.random() * avail2.length)] : pool2[Math.floor(Math.random() * pool2.length)];
+      }
+
+      usedSeedsRef.current.push(seed1, seed2);
+      if (usedSeedsRef.current.length > 60) usedSeedsRef.current = usedSeedsRef.current.slice(-30);
+
+      // Parallel fetch for speed + diversity
+      const [r1, r2] = await Promise.all([
+        fetch(`${getApiBase()}/search?q=${encodeURIComponent(seed1)}&filter=music`).catch(() => null),
+        fetch(`${getApiBase()}/search?q=${encodeURIComponent(seed2)}&filter=music`).catch(() => null),
+      ]);
+
+      const d1: QueueTrack[] = r1?.ok ? await r1.json().catch(() => []) : [];
+      const d2: QueueTrack[] = r2?.ok ? await r2.json().catch(() => []) : [];
+
+      // Interleave results for natural diversity: 1 from d1, 1 from d2, etc.
+      const interleaved: QueueTrack[] = [];
+      const len = Math.max(d1.length, d2.length);
+      for (let i = 0; i < len; i++) {
+        if (i < d1.length) interleaved.push(d1[i]);
+        if (i < d2.length) interleaved.push(d2[i]);
+      }
+
+      const fresh = interleaved.filter(t => !seenIdsRef.current.has(t.id));
       fresh.forEach(t => seenIdsRef.current.add(t.id));
+
       if (fresh.length > 0) {
         setAutoQueueActive(true);
         setQueue(prev => [...prev, ...fresh]);
@@ -220,17 +316,16 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  // ── Track end handler ────────────────────────────────────────────────────
   const handleTrackEnd = useCallback(async () => {
     const mode = repeatModeRef.current;
     const q = queueRef.current;
     const idx = queueIndexRef.current;
 
-    if (mode === 'one') {
-      await soundRef.current?.replayAsync().catch(() => {});
-      return;
-    }
+    if (mode === 'one') { await soundRef.current?.replayAsync().catch(() => {}); return; }
+
     const nextIdx = idx + 1;
-    if (nextIdx >= q.length - 4) fetchMoreTracks();
+    if (nextIdx >= q.length - 20) fetchMoreTracks();
 
     if (nextIdx < q.length) {
       setQueueIndex(nextIdx);
@@ -244,21 +339,17 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     }
   }, [fetchMoreTracks]);
 
-  // ── Core load — generation-guarded to prevent double playback ───────────
+  // ── Core load — generation guarded ──────────────────────────────────────
   const loadAndPlayTrack = async (track: QueueTrack) => {
-    const gen = ++loadGenRef.current;   // bump generation
+    const gen = ++loadGenRef.current;
 
     setIsLoading(true);
     clearInterval_();
 
-    // Unload previous sound first
     const prevSound = soundRef.current;
     soundRef.current = null;
-    if (prevSound) {
-      await prevSound.unloadAsync().catch(() => {});
-    }
+    if (prevSound) await prevSound.unloadAsync().catch(() => {});
 
-    // If another load was kicked off while we were unloading, bail
     if (gen !== loadGenRef.current) return;
 
     setCurrentTrack(track);
@@ -268,17 +359,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     updateMediaSessionMetadata(track);
 
     try {
-      const streamUrl = getStreamUrl(track.id);
       const { sound } = await Audio.Sound.createAsync(
-        { uri: streamUrl },
+        { uri: getStreamUrl(track.id) },
         { shouldPlay: true, rate: eqSettings.tempo, volume: 1.0 }
       );
 
-      // Stale check again after the async create
-      if (gen !== loadGenRef.current) {
-        sound.unloadAsync().catch(() => {});
-        return;
-      }
+      if (gen !== loadGenRef.current) { sound.unloadAsync().catch(() => {}); return; }
 
       soundRef.current = sound;
       setIsPlaying(true);
@@ -293,16 +379,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
           setPosition(status.positionMillis / 1000);
           setDuration((status.durationMillis ?? 0) / 1000);
           setIsPlaying(status.isPlaying);
-          if (status.didJustFinish) {
-            clearInterval_();
-            handleTrackEnd();
-          }
+          if (status.didJustFinish) { clearInterval_(); handleTrackEnd(); }
         } catch {}
       }, 500);
     } catch {
-      if (gen === loadGenRef.current) {
-        setIsLoading(false);
-      }
+      if (gen === loadGenRef.current) setIsLoading(false);
     }
   };
 
@@ -317,20 +398,27 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     for (const t of (newQueue ?? [track])) {
       if (!seen.has(t.id)) { seen.add(t.id); baseQueue.push(t); seenIdsRef.current.add(t.id); }
     }
-
     const idx = Math.max(0, baseQueue.findIndex(t => t.id === track.id));
     setQueue(baseQueue);
     setQueueIndex(idx);
     setAutoQueueActive(false);
     usedSeedsRef.current = [];
-
+    catCursorRef.current = 0;
     await loadAndPlayTrack(track);
 
-    // Background enrich: use explicit artist seed, track artist, or random radio seed
-    const seed = artistSeed ??
-      (track.artist ? `${track.artist} music similar songs` : pickSeed([]));
+    // Pre-fetch diverse tracks immediately
+    const seed = artistSeed ?? (track.artist ? `${track.artist} similar music mix` : undefined);
     fetchMoreTracks(seed);
+    // Kick off a second fetch from a different category for instant depth
+    setTimeout(() => fetchMoreTracks(), 3000);
   }, [fetchMoreTracks]);
+
+  const playAtIndex = useCallback(async (index: number) => {
+    const q = queueRef.current;
+    if (index < 0 || index >= q.length) return;
+    setQueueIndex(index);
+    await loadAndPlayTrack(q[index]);
+  }, []);
 
   const pause = useCallback(async () => {
     if (soundRef.current) {
@@ -361,14 +449,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     const q = queueRef.current;
     const idx = queueIndexRef.current;
     const nextIdx = idx + 1;
-    if (nextIdx >= q.length - 4) fetchMoreTracks();
-    if (nextIdx < q.length) {
-      setQueueIndex(nextIdx);
-      await loadAndPlayTrack(q[nextIdx]);
-    } else if (repeatModeRef.current === 'all' && q.length > 0) {
-      setQueueIndex(0);
-      await loadAndPlayTrack(q[0]);
-    }
+    if (nextIdx >= q.length - 20) fetchMoreTracks();
+    if (nextIdx < q.length) { setQueueIndex(nextIdx); await loadAndPlayTrack(q[nextIdx]); }
+    else if (repeatModeRef.current === 'all' && q.length > 0) { setQueueIndex(0); await loadAndPlayTrack(q[0]); }
   }, [fetchMoreTracks]);
   nextRef.current = next;
 
@@ -377,10 +460,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     const q = queueRef.current;
     const idx = queueIndexRef.current;
     const prevIdx = idx - 1;
-    if (prevIdx >= 0) {
-      setQueueIndex(prevIdx);
-      await loadAndPlayTrack(q[prevIdx]);
-    }
+    if (prevIdx >= 0) { setQueueIndex(prevIdx); await loadAndPlayTrack(q[prevIdx]); }
   }, [position, seek]);
   prevRef.current = prev;
 
@@ -401,12 +481,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   const removeFromQueue = useCallback((index: number) => {
     setQueue(prev => prev.filter((_, i) => i !== index));
+    setQueueIndex(prev => index < prev ? prev - 1 : prev);
   }, []);
 
   const clearQueue = useCallback(() => {
     setQueue([]); setQueueIndex(-1);
     seenIdsRef.current.clear(); usedSeedsRef.current = [];
-    setAutoQueueActive(false);
+    catCursorRef.current = 0; setAutoQueueActive(false);
   }, []);
 
   const reorderQueue = useCallback((from: number, to: number) => {
@@ -429,7 +510,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     <PlayerContext.Provider value={{
       currentTrack, isPlaying, position, duration, queue, queueIndex,
       shuffle, repeatMode, isLoading, eqSettings, autoQueueActive,
-      play, pause, resume, seek, next, prev,
+      play, playAtIndex, pause, resume, seek, next, prev,
       toggleShuffle, toggleRepeat, addToQueue, removeFromQueue,
       clearQueue, reorderQueue, updateEQ,
     }}>

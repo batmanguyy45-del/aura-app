@@ -5,7 +5,9 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useColors } from '@/hooks/useColors';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useAppTheme } from '@/hooks/useAppTheme';
+import { useSkin } from '@/contexts/SkinContext';
 import { usePlayer } from '@/contexts/PlayerContext';
 import { TrackRow } from '@/components/TrackRow';
 import { getApiBase } from '@/constants/api';
@@ -29,7 +31,8 @@ interface UrlInfo {
 const QUALITIES = ['audio-only', '360p', '480p', '720p', '1080p'];
 
 export default function SearchScreen() {
-  const colors = useColors();
+  const colors = useAppTheme();
+  const { skin } = useSkin();
   const insets = useSafeAreaInsets();
   const { play, addToQueue } = usePlayer();
 
@@ -91,39 +94,47 @@ export default function SearchScreen() {
     }, 400);
   };
 
-  const handleFilter = (f: Filter) => {
-    setFilter(f);
-    doSearch(query, f);
-  };
+  const handleFilter = (f: Filter) => { setFilter(f); doSearch(query, f); };
 
   const handleDownload = async () => {
-    if (downloading || !query) return;
+    if (downloading || !urlInfo) return;
     setDownloading(true);
     try {
-      Alert.alert('Download Queued', `Downloading with quality: ${selectedQuality}. The file will be saved when complete.`);
-    } finally {
-      setDownloading(false);
+      const resp = await fetch(`${getApiBase()}/download`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: query.trim(), quality: selectedQuality }),
+      });
+      if (resp.ok) {
+        Alert.alert('Download Started', `"${urlInfo.title}" is downloading in ${selectedQuality}.`);
+      } else {
+        Alert.alert('Download Failed', 'Could not start download.');
+      }
+    } catch {
+      Alert.alert('Download Failed', 'Network error, please try again.');
     }
+    setDownloading(false);
   };
 
-  const clear = () => {
-    setQuery('');
-    setResults([]);
-    setSuggestions([]);
-    setUrlInfo(null);
-  };
+  const clear = () => { setQuery(''); setResults([]); setSuggestions([]); setUrlInfo(null); };
 
   return (
-    <View style={[styles.screen, { backgroundColor: colors.background }]}>
-      <View style={[styles.header, { paddingTop: topPad + 12, borderBottomColor: colors.border, backgroundColor: colors.background }]}>
-        <View style={[styles.searchBar, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <Ionicons name="search" size={20} color={colors.mutedForeground} />
+    <View style={[styles.screen, { backgroundColor: skin.backgroundColor }]}>
+      <LinearGradient
+        colors={[skin.accentPrimary + '14', skin.backgroundColor]}
+        style={StyleSheet.absoluteFill}
+        start={{ x: 0.5, y: 0 }} end={{ x: 0.5, y: 0.25 }}
+      />
+
+      <View style={[styles.header, { paddingTop: topPad + 12, borderBottomColor: skin.textColor + '18', backgroundColor: skin.backgroundColor + 'F0' }]}>
+        <View style={[styles.searchBar, { backgroundColor: skin.textColor + '0C', borderColor: skin.textColor + '20' }]}>
+          <Ionicons name="search" size={20} color={skin.textColor + '66'} />
           <TextInput
             value={query}
             onChangeText={handleChange}
             placeholder="Search music or paste a URL..."
-            placeholderTextColor={colors.mutedForeground}
-            style={[styles.input, { color: colors.foreground }]}
+            placeholderTextColor={skin.textColor + '44'}
+            style={[styles.input, { color: skin.textColor }]}
             returnKeyType="search"
             onSubmitEditing={() => doSearch(query, filter)}
             autoCorrect={false}
@@ -131,11 +142,11 @@ export default function SearchScreen() {
           />
           {query.length > 0 && (
             <TouchableOpacity onPress={clear} hitSlop={8}>
-              <Ionicons name="close-circle" size={20} color={colors.mutedForeground} />
+              <Ionicons name="close-circle" size={20} color={skin.textColor + '55'} />
             </TouchableOpacity>
           )}
           <TouchableOpacity hitSlop={8}>
-            <Ionicons name="mic-outline" size={20} color={colors.primary} />
+            <Ionicons name="mic-outline" size={20} color={skin.accentPrimary} />
           </TouchableOpacity>
         </View>
 
@@ -144,12 +155,12 @@ export default function SearchScreen() {
             <TouchableOpacity
               key={f}
               onPress={() => handleFilter(f)}
-              style={[
-                styles.filterChip,
-                { backgroundColor: filter === f ? colors.primary : colors.card, borderColor: filter === f ? colors.primary : colors.border },
-              ]}
+              style={[styles.filterChip, {
+                backgroundColor: filter === f ? skin.accentPrimary : skin.textColor + '10',
+                borderColor: filter === f ? skin.accentPrimary : skin.textColor + '20',
+              }]}
             >
-              <Text style={[styles.filterText, { color: filter === f ? colors.primaryForeground : colors.mutedForeground }]}>{f}</Text>
+              <Text style={[styles.filterText, { color: filter === f ? '#fff' : skin.textColor + '88' }]}>{f}</Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
@@ -161,56 +172,56 @@ export default function SearchScreen() {
         keyboardShouldPersistTaps="handled"
       >
         {suggestions.length > 0 && !isUrl && (
-          <View style={[styles.suggestions, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={[styles.suggestions, { backgroundColor: skin.textColor + '0A', borderColor: skin.textColor + '18' }]}>
             {suggestions.map((s, i) => (
               <TouchableOpacity
                 key={i}
                 style={styles.suggestion}
                 onPress={() => { setQuery(s); setSuggestions([]); doSearch(s, filter); }}
               >
-                <Ionicons name="search-outline" size={16} color={colors.mutedForeground} />
-                <Text style={[styles.suggText, { color: colors.foreground }]}>{s}</Text>
+                <Ionicons name="search-outline" size={16} color={skin.textColor + '55'} />
+                <Text style={[styles.suggText, { color: skin.textColor }]}>{s}</Text>
               </TouchableOpacity>
             ))}
           </View>
         )}
 
         {isUrl && (
-          <View style={[styles.urlCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={[styles.urlCard, { backgroundColor: skin.textColor + '08', borderColor: skin.textColor + '18' }]}>
             {loadingUrl ? (
-              <ActivityIndicator color={colors.primary} style={{ padding: 32 }} />
+              <ActivityIndicator color={skin.accentPrimary} style={{ padding: 32 }} />
             ) : urlInfo ? (
               <View style={styles.urlContent}>
-                <Text style={[styles.urlSite, { color: colors.primary }]}>{urlInfo.site_name}</Text>
-                <Text style={[styles.urlTitle, { color: colors.foreground }]} numberOfLines={3}>{urlInfo.title}</Text>
-                <Text style={[styles.urlUploader, { color: colors.mutedForeground }]}>{urlInfo.uploader}</Text>
+                <Text style={[styles.urlSite, { color: skin.accentPrimary }]}>{urlInfo.site_name}</Text>
+                <Text style={[styles.urlTitle, { color: skin.textColor }]} numberOfLines={3}>{urlInfo.title}</Text>
+                <Text style={[styles.urlUploader, { color: skin.textColor + '77' }]}>{urlInfo.uploader}</Text>
                 <View style={styles.qualityRow}>
                   {QUALITIES.map(q => (
                     <TouchableOpacity
                       key={q}
                       onPress={() => setSelectedQuality(q)}
-                      style={[
-                        styles.qualityChip,
-                        { backgroundColor: selectedQuality === q ? colors.primary : colors.muted, borderColor: selectedQuality === q ? colors.primary : colors.border },
-                      ]}
+                      style={[styles.qualityChip, {
+                        backgroundColor: selectedQuality === q ? skin.accentPrimary : skin.textColor + '10',
+                        borderColor: selectedQuality === q ? skin.accentPrimary : skin.textColor + '20',
+                      }]}
                     >
-                      <Text style={[styles.qualityText, { color: selectedQuality === q ? colors.primaryForeground : colors.mutedForeground }]}>{q}</Text>
+                      <Text style={[styles.qualityText, { color: selectedQuality === q ? '#fff' : skin.textColor + '77' }]}>{q}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
                 <TouchableOpacity
                   onPress={handleDownload}
                   disabled={downloading}
-                  style={[styles.dlBtn, { backgroundColor: downloading ? colors.muted : colors.primary }]}
+                  style={[styles.dlBtn, { backgroundColor: downloading ? skin.textColor + '20' : skin.accentPrimary }]}
                 >
-                  <Ionicons name="download-outline" size={18} color={downloading ? colors.mutedForeground : '#fff'} />
-                  <Text style={[styles.dlBtnText, { color: downloading ? colors.mutedForeground : '#fff' }]}>
+                  <Ionicons name="download-outline" size={18} color={downloading ? skin.textColor + '55' : '#fff'} />
+                  <Text style={[styles.dlBtnText, { color: downloading ? skin.textColor + '55' : '#fff' }]}>
                     {downloading ? 'Downloading...' : 'Download'}
                   </Text>
                 </TouchableOpacity>
               </View>
             ) : (
-              <Text style={[styles.urlError, { color: colors.mutedForeground }]}>
+              <Text style={[styles.urlError, { color: skin.textColor + '66' }]}>
                 Paste a URL to download from YouTube, Instagram, TikTok, SoundCloud, and 1000+ sites.
               </Text>
             )}
@@ -219,7 +230,7 @@ export default function SearchScreen() {
 
         {loading && !isUrl && (
           <View style={styles.center}>
-            <ActivityIndicator color={colors.primary} size="large" />
+            <ActivityIndicator color={skin.accentPrimary} size="large" />
           </View>
         )}
 
@@ -228,24 +239,33 @@ export default function SearchScreen() {
             key={track.id}
             track={track}
             onPlay={() => play(track, results)}
-            onDownload={() => Alert.alert('Download', `Downloading "${track.title}"...`)}
+            onDownload={() => {
+              fetch(`${getApiBase()}/download`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ videoId: track.id, quality: 'audio-only' }),
+              }).then(r => {
+                if (r.ok) Alert.alert('Download Started', `"${track.title}" is downloading.`);
+                else Alert.alert('Download Failed', 'Please try again.');
+              }).catch(() => Alert.alert('Download Failed', 'Network error.'));
+            }}
             onAddToQueue={() => addToQueue(track)}
           />
         ))}
 
         {!loading && !isUrl && results.length === 0 && query.length > 2 && (
           <View style={styles.empty}>
-            <Ionicons name="search-outline" size={52} color={colors.mutedForeground} />
-            <Text style={[styles.emptyTitle, { color: colors.foreground }]}>No results</Text>
-            <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>Try a different search term</Text>
+            <Ionicons name="search-outline" size={52} color={skin.textColor + '44'} />
+            <Text style={[styles.emptyTitle, { color: skin.textColor }]}>No results</Text>
+            <Text style={[styles.emptyText, { color: skin.textColor + '66' }]}>Try a different search term</Text>
           </View>
         )}
 
         {!query && (
           <View style={styles.empty}>
-            <Ionicons name="globe-outline" size={52} color={colors.mutedForeground} />
-            <Text style={[styles.emptyTitle, { color: colors.foreground }]}>Search or Download</Text>
-            <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>
+            <Ionicons name="globe-outline" size={52} color={skin.textColor + '33'} />
+            <Text style={[styles.emptyTitle, { color: skin.textColor }]}>Search or Download</Text>
+            <Text style={[styles.emptyText, { color: skin.textColor + '66' }]}>
               Find any track, or paste a URL to{'\n'}download from 1000+ sites worldwide
             </Text>
           </View>
@@ -257,86 +277,24 @@ export default function SearchScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  header: {
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-  },
-  searchBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginHorizontal: 16,
-    marginBottom: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderRadius: 14,
-    borderWidth: 1,
-    gap: 10,
-  },
-  input: {
-    flex: 1,
-    fontSize: 15,
-  },
-  filterRow: {
-    paddingHorizontal: 16,
-    flexDirection: 'row',
-  },
-  filterChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 20,
-    borderWidth: 1,
-    marginRight: 8,
-  },
-  filterText: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  suggestions: {
-    margin: 16,
-    borderRadius: 12,
-    borderWidth: 1,
-    overflow: 'hidden',
-  },
-  suggestion: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 13,
-    gap: 12,
-  },
+  header: { paddingBottom: 12, borderBottomWidth: 1 },
+  searchBar: { flexDirection: 'row', alignItems: 'center', marginHorizontal: 16, marginBottom: 12, paddingHorizontal: 14, paddingVertical: 12, borderRadius: 14, borderWidth: 1, gap: 10 },
+  input: { flex: 1, fontSize: 15 },
+  filterRow: { paddingHorizontal: 16, flexDirection: 'row' },
+  filterChip: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20, borderWidth: 1, marginRight: 8 },
+  filterText: { fontSize: 13, fontWeight: '600' },
+  suggestions: { margin: 16, borderRadius: 12, borderWidth: 1, overflow: 'hidden' },
+  suggestion: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 13, gap: 12 },
   suggText: { fontSize: 14 },
-  urlCard: {
-    margin: 16,
-    borderRadius: 16,
-    borderWidth: 1,
-    overflow: 'hidden',
-  },
+  urlCard: { margin: 16, borderRadius: 16, borderWidth: 1, overflow: 'hidden' },
   urlContent: { padding: 16, gap: 10 },
-  urlSite: {
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 2,
-    textTransform: 'uppercase',
-  },
+  urlSite: { fontSize: 11, fontWeight: '800', letterSpacing: 2, textTransform: 'uppercase' },
   urlTitle: { fontSize: 16, fontWeight: '700', lineHeight: 22 },
   urlUploader: { fontSize: 13 },
   qualityRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  qualityChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: 1,
-  },
+  qualityChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1 },
   qualityText: { fontSize: 12, fontWeight: '600' },
-  dlBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 14,
-    borderRadius: 12,
-    gap: 8,
-    marginTop: 4,
-  },
+  dlBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 14, borderRadius: 12, gap: 8, marginTop: 4 },
   dlBtnText: { fontSize: 15, fontWeight: '700' },
   urlError: { padding: 24, fontSize: 14, textAlign: 'center', lineHeight: 20 },
   center: { paddingVertical: 60, alignItems: 'center' },

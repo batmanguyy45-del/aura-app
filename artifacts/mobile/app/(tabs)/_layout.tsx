@@ -10,6 +10,7 @@ import { BottomTabBar } from "@react-navigation/bottom-tabs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useColors } from "@/hooks/useColors";
+import { useSkin } from "@/contexts/SkinContext";
 import { MiniPlayer } from "@/components/MiniPlayer";
 import { usePlayer } from "@/contexts/PlayerContext";
 
@@ -50,24 +51,28 @@ function NativeTabLayout() {
 
 function ClassicTabLayout() {
   const colors = useColors();
+  const { skin } = useSkin();
   const colorScheme = useColorScheme();
   const isDark = colorScheme === "dark";
   const isIOS = Platform.OS === "ios";
   const isWeb = Platform.OS === "web";
-  const insets = useSafeAreaInsets();
   const { currentTrack } = usePlayer();
+
+  const tabBg = skin.backgroundColor;
+  const activeColor = skin.accentPrimary;
+  const inactiveColor = skin.textColor + '55';
 
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.mutedForeground,
+        tabBarActiveTintColor: activeColor,
+        tabBarInactiveTintColor: inactiveColor,
         tabBarStyle: {
           position: "absolute",
-          backgroundColor: isIOS ? "transparent" : colors.card,
+          backgroundColor: isIOS ? "transparent" : tabBg,
           borderTopWidth: 1,
-          borderTopColor: colors.border,
+          borderTopColor: skin.textColor + '18',
           elevation: 0,
           ...(isWeb ? { height: 84 } : {}),
         },
@@ -79,7 +84,7 @@ function ClassicTabLayout() {
               style={StyleSheet.absoluteFill}
             />
           ) : (
-            <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.card }]} />
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: tabBg }]} />
           ),
       }}
       tabBar={(props) => (
