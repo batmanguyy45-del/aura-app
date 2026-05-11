@@ -1,0 +1,116 @@
+{
+  "id": "e437fb22-a516-49df-b459-a0e338dd5daf",
+  "createdAt": "2026-05-11T11:29:21.929Z",
+  "runtimeVersion": "exposdk:54.0.0",
+  "launchAsset": {
+    "key": "bundle-1778498961929-5786",
+    "contentType": "application/javascript",
+    "url": "https://a9d3a44e-3c8f-472f-b33a-fdf88dc8b1e0-00-3alyhjycstvhc.picard.replit.dev/1778498961929-5786/_expo/static/js/android/bundle.js"
+  },
+  "assets": [],
+  "metadata": {},
+  "extra": {
+    "eas": {
+      "projectId": "b8c28733-e497-49d0-bf34-7b49721283fe"
+    },
+    "expoClient": {
+      "name": "AURA",
+      "slug": "mobile",
+      "version": "1.0.0",
+      "orientation": "portrait",
+      "icon": "./assets/images/icon.png",
+      "scheme": "mobile",
+      "userInterfaceStyle": "dark",
+      "newArchEnabled": true,
+      "splash": {
+        "image": "./assets/images/icon.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#080810",
+        "imageUrl": "http://127.0.0.1:8083/assets/./assets/images/icon.png"
+      },
+      "ios": {
+        "supportsTablet": false,
+        "bundleIdentifier": "com.Aura.mobile",
+        "infoPlist": {
+          "ITSAppUsesNonExemptEncryption": false
+        }
+      },
+      "android": {
+        "backgroundColor": "#080810",
+        "permissions": [
+          "android.permission.RECORD_AUDIO",
+          "android.permission.MODIFY_AUDIO_SETTINGS"
+        ],
+        "package": "com.Aura.mobile"
+      },
+      "web": {
+        "favicon": "./assets/images/icon.png"
+      },
+      "plugins": [
+        [
+          "expo-router",
+          {
+            "origin": "https://replit.com/"
+          }
+        ],
+        "expo-font",
+        "expo-web-browser",
+        "expo-av"
+      ],
+      "experiments": {
+        "typedRoutes": true,
+        "reactCompiler": true
+      },
+      "extra": {
+        "eas": {
+          "projectId": "b8c28733-e497-49d0-bf34-7b49721283fe"
+        },
+        "router": {
+          "origin": "https://replit.com/"
+        }
+      },
+      "owner": "durkioo",
+      "_internal": {
+        "isDebug": false,
+        "projectRoot": "/home/runner/workspace/artifacts/mobile",
+        "dynamicConfigPath": {},
+        "staticConfigPath": "/home/runner/workspace/artifacts/mobile/app.json",
+        "packageJsonPath": "/home/runner/workspace/artifacts/mobile/package.json",
+        "pluginHistory": {
+          "expo-font": {
+            "name": "expo-font",
+            "version": "14.0.11"
+          },
+          "expo-web-browser": {
+            "name": "expo-web-browser",
+            "version": "15.0.11"
+          },
+          "expo-av": {
+            "name": "expo-av",
+            "version": "16.0.8"
+          }
+        }
+      },
+      "sdkVersion": "54.0.0",
+      "platforms": [
+        "ios",
+        "android",
+        "web"
+      ],
+      "iconUrl": "http://127.0.0.1:8083/assets/./assets/images/icon.png",
+      "hostUri": "a9d3a44e-3c8f-472f-b33a-fdf88dc8b1e0-00-3alyhjycstvhc.picard.replit.dev/android"
+    },
+    "expoGo": {
+      "debuggerHost": "a9d3a44e-3c8f-472f-b33a-fdf88dc8b1e0-00-3alyhjycstvhc.picard.replit.dev/android",
+      "developer": {
+        "tool": "expo-cli",
+        "projectRoot": "/home/runner/workspace/artifacts/mobile"
+      },
+      "packagerOpts": {
+        "dev": false
+      },
+      "mainModuleName": "node_modules/.pnpm/expo-router@6.0.23_@types+react-dom@19.1.11_@types+react@19.1.17__@types+react@19.1.17__950497bba3dbc1f6b1863109f86ef06a/node_modules/expo-router/entry"
+    },
+    "scopeKey": "@anonymous/mobile-75f942f7-9daa-4aae-a4a0-e234ae7a044c"
+  }
+}
