@@ -127,43 +127,59 @@ router.get("/search", async (req: Request, res: Response) => {
   }
 });
 
-// GET /stream/:videoId  — proxy best audio stream
+// GET /stream/:videoId  — Piped first, yt-dlp fallback
 router.get("/stream/:videoId", async (req: Request, res: Response) => {
   const { videoId } = req.params;
-  try {
-    // Get best audio-only URL from yt-dlp
+  const PIPED_API = process.env.PIPED_API ?? "https://pipedapi.kavin.rocks";
+
+  async function getStreamUrl(): Promise<{ url: string; mimeType: string }> {
+    // Try Piped first — no bot detection, faster
+    try {
+      const pipedResp = await fetch(`${PIPED_API}/streams/${videoId}`, {
+        signal: AbortSignal.timeout(10_000),
+        headers: { "User-Agent": "Mozilla/5.0" },
+      });
+      if (pipedResp.ok) {
+        const data = await pipedResp.json() as {
+          audioStreams: Array<{ url: string; mimeType: string; bitrate: number }>;
+        };
+        if (data.audioStreams?.length) {
+          const best = data.audioStreams.sort((a, b) => b.bitrate - a.bitrate)[0];
+          if (best?.url) return { url: best.url, mimeType: best.mimeType ?? "audio/mp4" };
+        }
+      }
+    } catch {}
+
+    // Fallback to yt-dlp
     const urlOut = await ytdlpRun([
-      "-g",
-      "-f", "bestaudio/best",
-      "--no-playlist",
-      "--no-warnings",
+      "-g", "-f", "bestaudio/best",
+      "--no-playlist", "--no-warnings",
       `https://www.youtube.com/watch?v=${videoId}`,
     ], 20_000);
-    const streamUrl = urlOut.trim().split("\n")[0];
-    if (!streamUrl) throw new Error("No stream URL");
+    const url = urlOut.trim().split("\n")[0];
+    if (!url) throw new Error("No stream URL");
+    return { url, mimeType: "audio/webm" };
+  }
 
-    const upstreamHeaders: Record<string, string> = {
-      "User-Agent": "Mozilla/5.0",
-    };
+  try {
+    const { url: streamUrl, mimeType } = await getStreamUrl();
+
+    const upstreamHeaders: Record<string, string> = { "User-Agent": "Mozilla/5.0" };
     if (req.headers.range) upstreamHeaders["Range"] = req.headers.range;
 
     const upstream = await fetch(streamUrl, { headers: upstreamHeaders });
     if (!upstream.body) throw new Error("No body");
 
     res.status(req.headers.range ? 206 : 200);
-    const ct = upstream.headers.get("content-type") ?? "audio/webm";
-    res.setHeader("Content-Type", ct);
+    res.setHeader("Content-Type", upstream.headers.get("content-type") ?? mimeType);
     res.setHeader("Accept-Ranges", "bytes");
     res.setHeader("Cache-Control", "no-cache");
-
     const cl = upstream.headers.get("content-length");
     if (cl) res.setHeader("Content-Length", cl);
     const cr = upstream.headers.get("content-range");
     if (cr) res.setHeader("Content-Range", cr);
 
-    const readable = Readable.fromWeb(
-      upstream.body as Parameters<typeof Readable.fromWeb>[0]
-    );
+    const readable = Readable.fromWeb(upstream.body as Parameters<typeof Readable.fromWeb>[0]);
     readable.pipe(res);
     req.on("close", () => readable.destroy());
   } catch (err) {
