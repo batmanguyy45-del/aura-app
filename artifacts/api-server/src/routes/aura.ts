@@ -79,7 +79,6 @@ function parseFlatLines(jsonLines: string) {
 try { spawn(ytdlp, ["-U"], { stdio: "ignore" }); } catch {}
 
 // Write YouTube cookies from env var if available
-import { writeFileSync, existsSync } from "fs";
 const cookiesB64 = process.env.YOUTUBE_COOKIES_B64;
 if (cookiesB64) {
   try {
