@@ -17,16 +17,6 @@ router.use(limiter);
 
 const ytdlp = process.env.YT_DLP_PATH ?? "yt-dlp";
 
-// Write YouTube cookies on startup
-import { writeFileSync, existsSync } from "fs";
-try {
-  const b64 = process.env.YOUTUBE_COOKIES_B64;
-  if (b64) {
-    writeFileSync("/tmp/yt-cookies.txt", Buffer.from(b64, "base64").toString("utf-8"));
-    console.log("YouTube cookies loaded successfully");
-  }
-} catch (e) { console.error("Cookie error:", e); }
-const COOKIES_ARGS = existsSync("/tmp/yt-cookies.txt") ? ["--cookies", "/tmp/yt-cookies.txt"] : [];
 
 // Simple in-memory TTL cache
 const cache = new Map<string, { data: unknown; exp: number }>();
