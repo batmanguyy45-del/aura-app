@@ -77,6 +77,17 @@ function parseFlatLines(jsonLines: string) {
 // Auto-update yt-dlp on startup (non-blocking)
 try { spawn(ytdlp, ["-U"], { stdio: "ignore" }); } catch {}
 
+// Write YouTube cookies from env var if available
+import { writeFileSync, existsSync } from "fs";
+const cookiesB64 = process.env.YOUTUBE_COOKIES_B64;
+if (cookiesB64) {
+  try {
+    writeFileSync("/tmp/yt-cookies.txt", Buffer.from(cookiesB64, "base64").toString("utf-8"));
+    console.log("YouTube cookies loaded");
+  } catch (e) { console.error("Cookie write failed:", e); }
+}
+const COOKIES_ARGS = existsSync("/tmp/yt-cookies.txt") ? ["--cookies", "/tmp/yt-cookies.txt"] : [];
+
 // ── Routes ──────────────────────────────────────────────────────────────────
 
 // GET /trending
@@ -202,6 +213,7 @@ router.get("/stream/:videoId", async (req: Request, res: Response) => {
       const urlOut = await ytdlpRun([
         "-g", "-f", "bestaudio/best",
         "--extractor-args", `youtube:player_client=${client}`,
+        ...COOKIES_ARGS,
         "--no-playlist", "--no-warnings",
         `https://www.youtube.com/watch?v=${videoId}`,
       ], 15_000);

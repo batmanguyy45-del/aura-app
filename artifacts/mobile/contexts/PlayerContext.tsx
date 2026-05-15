@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useRef, useCallback, useEff
 import { Audio } from 'expo-av';
 import { Platform } from 'react-native';
 import type { Track, SearchResult, EQSettings } from '@/constants/types';
-import { getStreamUrl, getApiBase } from '@/constants/api';
+import { getStreamUrl, getApiBase, resolveStreamUrl } from "@/constants/api";
 
 export type QueueTrack = Track | SearchResult;
 
@@ -360,7 +360,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
     try {
       const { sound } = await Audio.Sound.createAsync(
-        { uri: getStreamUrl(track.id) },
+        { uri: await resolveStreamUrl(track.id) },
         { shouldPlay: true, rate: eqSettings.tempo, volume: 1.0 }
       );
 
