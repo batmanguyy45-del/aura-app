@@ -150,7 +150,6 @@ router.get("/stream/:videoId", async (req: Request, res: Response) => {
         "-g", "-f", "bestaudio/best",
         "--extractor-args", `youtube:player_client=${client}`,
         ...COOKIES_ARGS,
-        "--extractor-args", "youtubepot-bgutilscript:script_path=bgutil-pot",
         "--no-playlist", "--no-warnings",
         `https://www.youtube.com/watch?v=${videoId}`,
       ];
